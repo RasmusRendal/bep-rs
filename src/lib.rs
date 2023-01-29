@@ -1,9 +1,11 @@
+pub mod models;
+pub mod schema;
+
 use std::path::PathBuf;
 use self::models::*;
 use diesel::prelude::*;
 
-pub mod models;
-pub mod schema;
+use rand::distributions::{Alphanumeric, DistString};
 
 pub struct BepState {
     pub data_directory: PathBuf,
@@ -20,6 +22,29 @@ impl BepState {
     pub fn get_sync_directories(&mut self) -> Vec<Syncfolder> {
         use self::schema::syncfolders::dsl::*;
         syncfolders.load::<Syncfolder>(&mut self.connection).unwrap_or(Vec::new())
+    }
+
+    pub fn add_sync_directory(&mut self, path: PathBuf) {
+        use crate::schema::syncfolders;
+        use crate::schema::syncfolders::dsl::*;
+
+        if !path.exists() {
+            panic!("Folder {} not found", path.display());
+        }
+
+        let folder_id: String = Alphanumeric.sample_string(&mut rand::thread_rng(), 12);
+
+        let new_dir = Syncfolder {
+            id: Some(folder_id),
+            label: path.file_name().unwrap().to_owned().into_string().unwrap(),
+            dir_path: path.display().to_string()
+        };
+
+        diesel::insert_into(syncfolders::table)
+            .values(&new_dir)
+            .execute(&mut self.connection)
+            .expect("Error adding directory");
+
     }
 
 }
