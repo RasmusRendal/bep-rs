@@ -24,9 +24,17 @@ impl BepState {
         syncfolders.load::<Syncfolder>(&mut self.connection).unwrap_or(Vec::new())
     }
 
+    pub fn remove_sync_directory(&mut self, to_remove: String) {
+        use crate::schema::syncfolders::dsl::syncfolders;
+        use crate::schema::syncfolders::id;
+
+        diesel::delete(syncfolders.filter(id.eq(to_remove)))
+            .execute(& mut self.connection)
+            .expect("Error deleting folder");
+    }
+
     pub fn add_sync_directory(&mut self, path: PathBuf) {
         use crate::schema::syncfolders;
-        use crate::schema::syncfolders::dsl::*;
 
         if !path.exists() {
             panic!("Folder {} not found", path.display());
