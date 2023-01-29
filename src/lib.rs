@@ -1,5 +1,9 @@
 use std::path::PathBuf;
+use self::models::*;
 use diesel::prelude::*;
+
+pub mod models;
+pub mod schema;
 
 pub struct BepState {
     pub data_directory: PathBuf,
@@ -8,9 +12,14 @@ pub struct BepState {
 
 impl BepState {
     pub fn new(mut data_directory: PathBuf) -> Self {
-        data_directory.push("dq.sqlite");
+        data_directory.push("db.sqlite");
         let connection = SqliteConnection::establish(data_directory.to_str().unwrap()).unwrap_or_else(|_| panic!("Error connecting to database"));
         BepState { data_directory: data_directory, connection: connection }
+    }
+
+    pub fn get_sync_directories(&mut self) -> Vec<Syncfolder> {
+        use self::schema::syncfolders::dsl::*;
+        syncfolders.load::<Syncfolder>(&mut self.connection).unwrap_or(Vec::new())
     }
 
 }
