@@ -7,4 +7,6 @@ edition = "2021"
 
 [dependencies]
 diesel = { version = "2.0.0", features = ["sqlite"] }
+mio = "0.8.5"
 rand = "0.8.5"
+rustls = "0.20.8"
