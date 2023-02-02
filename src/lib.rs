@@ -24,6 +24,19 @@ impl BepState {
         syncfolders.load::<Syncfolder>(&mut self.connection).unwrap_or(Vec::new())
     }
 
+    pub fn get_peers(&mut self) -> Vec<Peer> {
+        use self::schema::peers::dsl::*;
+        peers.load::<Peer>(&mut self.connection).unwrap_or(Vec::new())
+    }
+
+    pub fn get_addresses(&mut self, peer: Peer) -> Vec<String> {
+        use self::schema::peers::dsl::*;
+        use self::schema::peer_addresses::dsl::*;
+        PeerAddress::belonging_to(&peer)
+            .select(address)
+            .load::<String>(&mut self.connection).unwrap_or(Vec::new())
+    }
+
     pub fn remove_sync_directory(&mut self, to_remove: String) {
         use crate::schema::syncfolders::dsl::syncfolders;
         use crate::schema::syncfolders::id;
