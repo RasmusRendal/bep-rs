@@ -3,6 +3,9 @@ use super::models::*;
 use diesel::prelude::*;
 use std::fs;
 
+use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations/");
+
 pub struct BepState {
     pub data_directory: PathBuf,
     connection: SqliteConnection,
@@ -24,7 +27,10 @@ impl BepState {
             }
         }
         data_directory.push("db.sqlite");
-        let connection = SqliteConnection::establish(data_directory.to_str().unwrap()).unwrap_or_else(|_| panic!("Error connecting to database"));
+        let mut connection = SqliteConnection::establish(data_directory.to_str().unwrap()).unwrap_or_else(|_| panic!("Error connecting to database"));
+        if let Err(e) = connection.run_pending_migrations(MIGRATIONS) {
+            panic!("Error when applying database migrations: {}", e);
+        }
         BepState { data_directory, connection }
     }
 

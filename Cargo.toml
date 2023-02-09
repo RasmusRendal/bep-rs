@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 diesel = { version = "2.0.0", features = ["sqlite"] }
+diesel_migrations = "2.0.0"
 mio = { version = "0.8.5", features = ["net", "os-poll"] }
 rand = "0.8.5"
 rustls = "0.20.8"
