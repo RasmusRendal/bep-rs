@@ -34,9 +34,9 @@ impl BepState {
         BepState { data_directory, connection }
     }
 
-    pub fn get_sync_directories(&mut self) -> Vec<Syncfolder> {
-        use super::schema::syncfolders::dsl::*;
-        syncfolders.load::<Syncfolder>(&mut self.connection).unwrap_or(Vec::new())
+    pub fn get_sync_directories(&mut self) -> Vec<SyncFolder> {
+        use super::schema::sync_folders::dsl::*;
+        sync_folders.load::<SyncFolder>(&mut self.connection).unwrap_or(Vec::new())
     }
 
     pub fn get_peers(&mut self) -> Vec<Peer> {
@@ -52,17 +52,17 @@ impl BepState {
     }
 
     pub fn remove_sync_directory(&mut self, to_remove: String) {
-        use crate::schema::syncfolders::dsl::syncfolders;
-        use crate::schema::syncfolders::id;
+        use crate::schema::sync_folders::dsl::sync_folders;
+        use crate::schema::sync_folders::id;
 
-        diesel::delete(syncfolders.filter(id.eq(to_remove)))
+        diesel::delete(sync_folders.filter(id.eq(to_remove)))
             .execute(& mut self.connection)
             .expect("Error deleting folder");
     }
 
     pub fn add_sync_directory(&mut self, path: PathBuf) {
         use rand::distributions::{Alphanumeric, DistString};
-        use crate::schema::syncfolders;
+        use crate::schema::sync_folders;
 
         if !path.exists() {
             panic!("Folder {} not found", path.display());
@@ -70,13 +70,13 @@ impl BepState {
 
         let folder_id: String = Alphanumeric.sample_string(&mut rand::thread_rng(), 12);
 
-        let new_dir = Syncfolder {
+        let new_dir = SyncFolder {
             id: Some(folder_id),
             label: path.file_name().unwrap().to_owned().into_string().unwrap(),
             dir_path: path.display().to_string()
         };
 
-        diesel::insert_into(syncfolders::table)
+        diesel::insert_into(sync_folders::table)
             .values(&new_dir)
             .execute(&mut self.connection)
             .expect("Error adding directory");
