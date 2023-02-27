@@ -4,12 +4,16 @@ use std::str;
 use super::bep_state::BepState;
 use std::io::{Write, Read};
 
-use mio::net::{TcpListener, TcpStream};
+use mio::net::TcpStream;
 use mio::{Events, Interest, Poll, Token};
+
+use prost::Message;
 
 pub struct Daemon {
     state: BepState,
 }
+
+use super::items;
 
 const CLIENT: Token = Token(1);
 
@@ -18,17 +22,15 @@ fn connect_to_server(addr: String) -> Result<u8, Box<dyn Error>> {
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(128);
 
-    poll.registry().register(&mut stream, CLIENT, Interest::READABLE)?;
+    poll.registry().register(&mut stream, CLIENT, Interest::WRITABLE | Interest::READABLE)?;
     poll.poll(&mut events, Some(time::Duration::from_millis(100)))?;
     for event in events.iter() {
         if event.token() == CLIENT {
-            let mut buf : [u8; 8] = [0;8];
-            stream.read(&mut buf)?;
-            match str::from_utf8(&buf) {
-                Ok(v) => println!("Received data: {}", v),
-                Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
-            };
-
+            let r = items::Request {id: 1, folder: "default".to_string(), name: "file".to_string(), offset: 0, size: 0, hash: vec!(), from_temporary: false};
+            let mut msg_len: [u8;8] = r.encoded_len().to_be_bytes();
+            let mut buf = r.encode_length_delimited_to_vec();
+            stream.write(&mut msg_len[1..4])?;
+            stream.write(&mut buf)?;
         }
     }
     Ok(1)
@@ -43,7 +45,9 @@ impl Daemon {
         loop {
             for peer in self.state.get_peers() {
                 for addr in self.state.get_addresses(peer) {
-                    connect_to_server(addr);
+                    if let Err(e) = connect_to_server(addr) {
+                        println!("Something went wrong: {}", e);
+                    }
                 }
             }
             thread::sleep(time::Duration::from_millis(1000));
