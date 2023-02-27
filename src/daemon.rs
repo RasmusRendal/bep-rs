@@ -27,10 +27,7 @@ fn connect_to_server(addr: String) -> Result<u8, Box<dyn Error>> {
     for event in events.iter() {
         if event.token() == CLIENT {
             let r = items::Request {id: 1, folder: "default".to_string(), name: "file".to_string(), offset: 0, size: 0, hash: vec!(), from_temporary: false};
-            let mut msg_len: [u8;8] = r.encoded_len().to_be_bytes();
-            let mut buf = r.encode_length_delimited_to_vec();
-            stream.write(&mut msg_len[1..4])?;
-            stream.write(&mut buf)?;
+            send_message!(r, stream);
         }
     }
     Ok(1)

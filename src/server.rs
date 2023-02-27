@@ -65,14 +65,6 @@ fn run_server(address: String) -> Result<i32, Box<dyn Error>> {
                     if let Err(e) = handle_connection(&mut w) {
                         println!("Got error while handling request {}", e);
                     }
-//                    println!("Readable!");
-//                    let connection = listener.accept();
-//                    if let Ok((mut stream, _addr)) = connection {
-//                        if let Err(e) = handle_connection(&mut stream) {
-//                            println!("something went wrong: {}", e);
-//                        }
-//                    }
-
                 }
                 Token(_) => {
                     println!("Don't know what do do with this connection. Dropping");

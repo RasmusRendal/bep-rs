@@ -1,3 +1,4 @@
+#[macro_use]
 mod items;
 pub mod bep_state;
 pub mod models;
