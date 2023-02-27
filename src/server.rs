@@ -17,6 +17,17 @@ pub struct Server {
 }
 
 fn handle_connection(stream: &mut TcpStream) -> Result<i32, Box<dyn Error>> {
+    let mut magic_buf: [u8;4] = [0;4];
+    stream.read_exact(&mut magic_buf);
+    let magic = u32::from_be_bytes(magic_buf);
+    if magic != 0x2EA7D90B {
+        println!("Invalid magic bytes");
+        //TODO: Find out how to return a proper error
+        return Ok(1);
+    }
+
+    let _hello = receive_message!(items::Hello, stream);
+
     let mut len_buf: [u8;4] = [0;4];
     stream.read_exact(&mut len_buf)?;
     let msg_len: usize = u32::from_be_bytes(len_buf) as usize;
