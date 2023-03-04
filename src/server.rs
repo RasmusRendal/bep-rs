@@ -17,30 +17,22 @@ pub struct Server {
 }
 
 fn handle_connection(stream: &mut TcpStream) -> Result<i32, Box<dyn Error>> {
-    let mut magic_buf: [u8;4] = [0;4];
-    stream.read_exact(&mut magic_buf);
-    let magic = u32::from_be_bytes(magic_buf);
+    let mut buffer = Vec::new();
+    let l = stream.read_to_end(&mut buffer)?;
+    if l == 0 {
+        return Ok(1);
+    }
+    let magic = u32::from_be_bytes(buffer[0..4].try_into()?);
     if magic != 0x2EA7D90B {
-        println!("Invalid magic bytes");
+        println!("Invalid magic bytes: {:X}, {magic}", magic);
         //TODO: Find out how to return a proper error
         return Ok(1);
     }
 
-    let _hello = receive_message!(items::Hello, stream);
+    let msg_buf = &buffer[4..];
+    let hello = parse_message!(items::Hello, msg_buf);
+    println!("{:?}", hello);
 
-    let mut len_buf: [u8;4] = [0;4];
-    stream.read_exact(&mut len_buf)?;
-    let msg_len: usize = u32::from_be_bytes(len_buf) as usize;
-
-    if msg_len > 2000 {
-        println!("too big a buffer {}", msg_len);
-        return Ok(1);
-    }
-
-    let mut buf = vec![0u8; msg_len];
-    stream.read_exact(&mut buf);
-    let i = items::Request::decode(&*buf)?;
-    println!("{:?}", i);
     Ok(1)
 }
 

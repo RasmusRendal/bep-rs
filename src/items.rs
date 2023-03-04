@@ -17,22 +17,12 @@ macro_rules! send_message {
 
 
 #[macro_export]
-macro_rules! receive_message {
-    ( $type:ty, $stream:expr )  => {
+macro_rules! parse_message {
+    ( $type:ty, $buffer:expr )  => {
         {
-            let mut len_buf: [u8;4] = [0;4];
-            $stream.read_exact(&mut len_buf)?;
-            let msg_len: usize = u32::from_be_bytes(len_buf) as usize;
-
-            if msg_len > 2000 {
-                println!("too big a buffer {}", msg_len);
-                return Ok(1);
-            }
-
-            let mut buf = vec![0u8; msg_len];
-            $stream.read_exact(&mut buf)?;
-            <$type>::decode(&*buf)?;
-
+            let msg_len = u32::from_be_bytes($buffer[0..4].try_into()?) as usize;
+            let msgg_buf = & $buffer[4..4+msg_len];
+            <$type>::decode(msgg_buf)
         }
     };
 }
