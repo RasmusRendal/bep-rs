@@ -21,34 +21,41 @@ const CLIENT: Token = Token(1);
 // TODO: Stop returning integers constantly, figure out how to have a result return type with
 // void/error
 /// Given a socket, send a BEP hello message
-fn send_hello(socket: &mut TcpStream) -> Result<u8, Box<dyn Error>> {
-    let mut magic = (0x2EA7D90B as u32).to_be_bytes().to_vec();
+pub fn send_hello(socket: &mut TcpStream) -> Result<u8, Box<dyn Error>> {
     let hello = items::Hello {device_name: "device".to_string(), client_name: "beercan".to_string(), client_version: "0.1".to_string()};
-    let hello_len = u32::to_be_bytes(hello.encoded_len() as u32);
-    let mut hello = hello.encode_to_vec();
-    let mut msg = Vec::new();
-    msg.append(&mut magic);
-    msg.extend_from_slice(&hello_len);
-    msg.append(&mut hello);
-    socket.write(&mut msg)?;
 
-    let r = items::Request {id: 1, folder: "default".to_string(), name: "file".to_string(), offset: 0, size: 0, hash: vec!(), from_temporary: false};
-    send_message!(r, socket);
+    let magic = (0x2EA7D90B as u32).to_be_bytes().to_vec();
+    socket.write_all(&magic)?;
+    socket.write_all(&u32::to_be_bytes(hello.encoded_len() as u32))?;
+    socket.write_all(&hello.encode_to_vec())?;
+
     Ok(1)
 }
 
 /// Try and connect to the server at addr
 fn connect_to_server(addr: String) -> Result<u8, Box<dyn Error>> {
+    info!(target: "Daemon", "");
+    info!(target: "Daemon", "Connecting to {addr}");
     let mut stream = TcpStream::connect(addr.parse()?)?;
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(128);
 
-    info!(target: "Daemon", "Connecting to server at {} ...", addr);
-    poll.registry().register(&mut stream, CLIENT, Interest::WRITABLE | Interest::READABLE)?;
-    poll.poll(&mut events, Some(time::Duration::from_millis(100)))?;
-    for event in events.iter() {
-        if event.token() == CLIENT {
-            send_hello(&mut stream)?;
+    poll.registry().register(&mut stream, CLIENT, Interest::WRITABLE)?;
+    let mut closed = false;
+    while !closed {
+        poll.poll(&mut events, Some(time::Duration::from_millis(100)))?;
+        for event in events.iter() {
+            if event.token() == CLIENT {
+                info!(target: "Daemon", "{:?}", event);
+                if event.is_read_closed() || event.is_write_closed() {
+                    closed = true;
+                } else {
+                    send_hello(&mut stream)?;
+                    stream.flush()?;
+                    drop(&mut stream);
+                    closed = true;
+                }
+            }
         }
     }
     Ok(1)

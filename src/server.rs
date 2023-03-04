@@ -1,6 +1,6 @@
 use std::error::Error;
 use super::bep_state::BepState;
-use std::io::Read;
+use std::io::{self, Read};
 use mio::net::{TcpStream, TcpListener};
 use mio::{Events, Interest, Poll, Token};
 use log::{info, warn, error, debug};
@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use prost::Message;
 use super::items;
+use super::daemon::send_hello;
 
 const SERVER: Token = Token(0);
 
@@ -18,28 +19,27 @@ pub struct Server {
 }
 
 /// Receive some messages from a new client, and print them
-fn handle_connection(stream: &mut TcpStream) -> Result<i32, Box<dyn Error>> {
-    //let mut buffer = Vec::new();
+fn handle_connection(stream: &mut TcpStream) -> io::Result<bool> {
     let mut hello_buffer: [u8;4] = [0;4];
     stream.read_exact(&mut hello_buffer)?;
     let magic = u32::from_be_bytes(hello_buffer);
-    if magic != 0x2EA7D90B {
+    if magic == 0 {
+        // The connection has been closed / There is no message for us
+        return Ok(false);
+    } else if magic != 0x2EA7D90B {
         error!("Invalid magic bytes: {:X}, {magic}", magic);
         //TODO: Find out how to return a proper error
-        return Ok(1);
+        return Ok(false);
     }
 
-    let hello = receive_message!(items::Hello, stream);
-    debug!("{:?}", hello);
+    let hello = receive_message!(items::Hello, stream)?;
+    info!(target: "Server", "{:?}", hello);
 
-    let request = receive_message!(items::Request, stream);
-    debug!("{:?}", request);
-
-    Ok(1)
+    Ok(true)
 }
 
 /// Listen for connections at address, printing whatever the client sends us
-fn run_server(address: String) -> Result<i32, Box<dyn Error>> {
+fn run_server(address: String) -> io::Result<()> {
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(128);
     let mut listener = TcpListener::bind(address.parse().unwrap()).unwrap();
@@ -52,28 +52,42 @@ fn run_server(address: String) -> Result<i32, Box<dyn Error>> {
 
     loop {
         poll.poll(&mut events, None)?;
-
         for event in events.iter() {
             match event.token() {
-                SERVER => {
-                    let connection = listener.accept();
-                    if let Ok((mut stream, _addr)) = connection {
-                        counter += 1;
-                        let token = Token(counter);
-                        poll.registry().register(&mut stream, token, Interest::WRITABLE)?;
-                        sockets.insert(token, stream);
+                SERVER => loop {
+                    let (mut connection, _) = match listener.accept() {
+                        Ok((connection, address)) => (connection, address),
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                            // If we get a `WouldBlock` error we know our
+                            // listener has no more incoming connections queued,
+                            // so we can return to polling and wait for some
+                            // more.
+                            break;
+                        }
+                        Err(e) => {
+                            // If it was any other kind of error, something went
+                            // wrong and we terminate with an error.
+                            //return Err(e);
+                            break;
+                        }
+                    };
+                    counter += 1;
+                    let token = Token(counter);
+                    poll.registry().register(&mut connection, token, Interest::READABLE)?;
+                    sockets.insert(token, connection);
+                }
+                token => {
+                    let done = if let Some(mut connection) = sockets.get_mut(&token) {
+                        handle_connection(&mut connection).unwrap_or(false)
                     } else {
-                        drop(connection);
+                        // Sporadic events happen, we can safely ignore them.
+                        false
+                    };
+                    if done {
+                        if let Some(mut connection) = sockets.remove(&token) {
+                            poll.registry().deregister(&mut connection)?;
+                        }
                     }
-                }
-                token if event.is_writable() => {
-                    let mut w = sockets.get_mut(&token).unwrap();
-                    if let Err(e) = handle_connection(&mut w) {
-                        error!("Got error while handling request {}", e);
-                    }
-                }
-                Token(_) => {
-                    warn!("Don't know what do do with this connection. Dropping");
                 }
             }
         }

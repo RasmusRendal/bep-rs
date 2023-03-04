@@ -22,13 +22,15 @@ macro_rules! send_message {
 macro_rules! receive_message {
     ( $type:ty, $stream:expr )  => {
         {
-            let mut len_buffer: [u8;4] = [0;4];
-            $stream.read_exact(&mut len_buffer)?;
-            let mut message_buffer = Vec::new();
-            message_buffer.reserve_exact(u32::from_be_bytes(len_buffer) as usize);
+            let mut msg_len: [u8;4] = [0;4];
+            $stream.read_exact(&mut msg_len)?;
+            let msg_len = u32::from_be_bytes(msg_len) as usize;
+            if msg_len == 0 {
+                println!("Message is empty");
+            }
+            let mut message_buffer = vec![0u8; msg_len];
             $stream.read_exact(&mut message_buffer)?;
             <$type>::decode(&*message_buffer)
         }
     };
 }
-
