@@ -26,7 +26,7 @@ macro_rules! receive_message {
             $stream.read_exact(&mut msg_len)?;
             let msg_len = u32::from_be_bytes(msg_len) as usize;
             if msg_len == 0 {
-                println!("Message is empty");
+                error!("Message is empty");
             }
             let mut message_buffer = vec![0u8; msg_len];
             $stream.read_exact(&mut message_buffer)?;
