@@ -15,6 +15,19 @@ macro_rules! send_message {
     };
 }
 
+#[macro_export]
+macro_rules! receive_message {
+    ( $type:ty, $stream:expr )  => {
+        {
+            let mut len_buffer: [u8;4] = [0;4];
+            $stream.read_exact(&mut len_buffer)?;
+            let mut message_buffer = Vec::new();
+            message_buffer.reserve_exact(u32::from_be_bytes(len_buffer) as usize);
+            $stream.read_exact(&mut message_buffer)?;
+            <$type>::decode(&*message_buffer)
+        }
+    };
+}
 
 #[macro_export]
 macro_rules! parse_message {

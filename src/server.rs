@@ -17,21 +17,21 @@ pub struct Server {
 }
 
 fn handle_connection(stream: &mut TcpStream) -> Result<i32, Box<dyn Error>> {
-    let mut buffer = Vec::new();
-    let l = stream.read_to_end(&mut buffer)?;
-    if l == 0 {
-        return Ok(1);
-    }
-    let magic = u32::from_be_bytes(buffer[0..4].try_into()?);
+    //let mut buffer = Vec::new();
+    let mut hello_buffer: [u8;4] = [0;4];
+    stream.read_exact(&mut hello_buffer)?;
+    let magic = u32::from_be_bytes(hello_buffer);
     if magic != 0x2EA7D90B {
         println!("Invalid magic bytes: {:X}, {magic}", magic);
         //TODO: Find out how to return a proper error
         return Ok(1);
     }
 
-    let msg_buf = &buffer[4..];
-    let hello = parse_message!(items::Hello, msg_buf);
+    let hello = receive_message!(items::Hello, stream);
     println!("{:?}", hello);
+
+    let request = receive_message!(items::Request, stream);
+    println!("{:?}", request);
 
     Ok(1)
 }
