@@ -3,6 +3,7 @@ use super::bep_state::BepState;
 use std::io::Read;
 use mio::net::{TcpStream, TcpListener};
 use mio::{Events, Interest, Poll, Token};
+use log::{info, warn, error, debug};
 
 use std::collections::HashMap;
 
@@ -22,16 +23,16 @@ fn handle_connection(stream: &mut TcpStream) -> Result<i32, Box<dyn Error>> {
     stream.read_exact(&mut hello_buffer)?;
     let magic = u32::from_be_bytes(hello_buffer);
     if magic != 0x2EA7D90B {
-        println!("Invalid magic bytes: {:X}, {magic}", magic);
+        error!("Invalid magic bytes: {:X}, {magic}", magic);
         //TODO: Find out how to return a proper error
         return Ok(1);
     }
 
     let hello = receive_message!(items::Hello, stream);
-    println!("{:?}", hello);
+    debug!("{:?}", hello);
 
     let request = receive_message!(items::Request, stream);
-    println!("{:?}", request);
+    debug!("{:?}", request);
 
     Ok(1)
 }
@@ -66,11 +67,11 @@ fn run_server(address: String) -> Result<i32, Box<dyn Error>> {
                 token if event.is_writable() => {
                     let mut w = sockets.get_mut(&token).unwrap();
                     if let Err(e) = handle_connection(&mut w) {
-                        println!("Got error while handling request {}", e);
+                        error!("Got error while handling request {}", e);
                     }
                 }
                 Token(_) => {
-                    println!("Don't know what do do with this connection. Dropping");
+                    warn!("Don't know what do do with this connection. Dropping");
                 }
             }
         }
@@ -90,6 +91,7 @@ impl Server {
 
     pub fn run(&mut self) -> Result<i32, Box<dyn Error>> {
         let address = self.bind_address.clone().unwrap();
+        info!("Starting server, listening on {} ...",address);
         run_server(address)?;
         Ok(0)
     }

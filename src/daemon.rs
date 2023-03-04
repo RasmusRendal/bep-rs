@@ -3,6 +3,7 @@ use std::{thread, time};
 use std::str;
 use super::bep_state::BepState;
 use std::io::{Write, Read};
+use log::{info, warn, error};
 
 use mio::net::TcpStream;
 use mio::{Events, Interest, Poll, Token};
@@ -40,6 +41,7 @@ fn connect_to_server(addr: String) -> Result<u8, Box<dyn Error>> {
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(128);
 
+    info!(target: "Daemon", "Connecting to server at {} ...", addr);
     poll.registry().register(&mut stream, CLIENT, Interest::WRITABLE | Interest::READABLE)?;
     poll.poll(&mut events, Some(time::Duration::from_millis(100)))?;
     for event in events.iter() {
@@ -60,11 +62,11 @@ impl Daemon {
             for peer in self.state.get_peers() {
                 for addr in self.state.get_addresses(peer) {
                     if let Err(e) = connect_to_server(addr) {
-                        println!("Something went wrong: {}", e);
+                        error!("Something went wrong: {}", e);
                     }
                 }
             }
-            thread::sleep(time::Duration::from_millis(1000));
+            thread::sleep(time::Duration::from_millis(2000));
         }
     }
 }
