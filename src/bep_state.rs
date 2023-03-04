@@ -6,12 +6,18 @@ use std::fs;
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations/");
 
+/// This structure maintains the state of a bep
+/// client
 pub struct BepState {
     pub data_directory: PathBuf,
     connection: SqliteConnection,
 }
 
 impl BepState {
+
+    /// Initialize the state. It tries to read a database
+    /// from the location data_directory. If this fails,
+    /// it creates a new database
     pub fn new(mut data_directory: PathBuf) -> Self {
         match data_directory.try_exists() {
             Ok(v) => {
@@ -34,16 +40,19 @@ impl BepState {
         BepState { data_directory, connection }
     }
 
+    /// Get list of directories to be synced
     pub fn get_sync_directories(&mut self) -> Vec<SyncFolder> {
         use super::schema::sync_folders::dsl::*;
         sync_folders.load::<SyncFolder>(&mut self.connection).unwrap_or(Vec::new())
     }
 
+    /// Get list of peers to the client
     pub fn get_peers(&mut self) -> Vec<Peer> {
         use super::schema::peers::dsl::*;
         peers.load::<Peer>(&mut self.connection).unwrap_or(Vec::new())
     }
 
+    /// Get the list of addressess associated wit hsome peer
     pub fn get_addresses(&mut self, peer: Peer) -> Vec<String> {
         use super::schema::peer_addresses::dsl::*;
         PeerAddress::belonging_to(&peer)
@@ -51,6 +60,7 @@ impl BepState {
             .load::<String>(&mut self.connection).unwrap_or(Vec::new())
     }
 
+    /// Stop syncing some directory
     pub fn remove_sync_directory(&mut self, to_remove: String) {
         use crate::schema::sync_folders::dsl::sync_folders;
         use crate::schema::sync_folders::id;
@@ -60,6 +70,7 @@ impl BepState {
             .expect("Error deleting folder");
     }
 
+    /// Start syncing some directory
     pub fn add_sync_directory(&mut self, path: PathBuf) {
         use rand::distributions::{Alphanumeric, DistString};
         use crate::schema::sync_folders;
