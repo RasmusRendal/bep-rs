@@ -19,6 +19,7 @@ const CLIENT: Token = Token(1);
 
 // TODO: Stop returning integers constantly, figure out how to have a result return type with
 // void/error
+/// Given a socket, send a BEP hello message
 fn send_hello(socket: &mut TcpStream) -> Result<u8, Box<dyn Error>> {
     let mut magic = (0x2EA7D90B as u32).to_be_bytes().to_vec();
     let hello = items::Hello {device_name: "device".to_string(), client_name: "beercan".to_string(), client_version: "0.1".to_string()};
@@ -35,6 +36,7 @@ fn send_hello(socket: &mut TcpStream) -> Result<u8, Box<dyn Error>> {
     Ok(1)
 }
 
+/// Try and connect to the server at addr
 fn connect_to_server(addr: String) -> Result<u8, Box<dyn Error>> {
     let mut stream = TcpStream::connect(addr.parse()?)?;
     let mut poll = Poll::new()?;
@@ -55,6 +57,10 @@ impl Daemon {
         Daemon { state }
     }
 
+    /// Runs the Daemon
+    ///
+    /// Currently, the daemon simply tries to connect to every peer,
+    /// as defined by the client state, in a loop
     pub fn run(&mut self) -> Result<i32, Box<dyn Error>> {
         loop {
             for peer in self.state.get_peers() {

@@ -1,5 +1,6 @@
 include!(concat!(env!("OUT_DIR"), "/beercanlib.items.rs"));
 
+/// Write a message defined in items.proto to the given stream
 #[macro_export]
 macro_rules! send_message {
     ( $msg:expr, $stream:expr )  => {
@@ -15,6 +16,8 @@ macro_rules! send_message {
     };
 }
 
+/// Given a stream, read a four-byte length, and then
+/// the message
 #[macro_export]
 macro_rules! receive_message {
     ( $type:ty, $stream:expr )  => {
@@ -25,17 +28,6 @@ macro_rules! receive_message {
             message_buffer.reserve_exact(u32::from_be_bytes(len_buffer) as usize);
             $stream.read_exact(&mut message_buffer)?;
             <$type>::decode(&*message_buffer)
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! parse_message {
-    ( $type:ty, $buffer:expr )  => {
-        {
-            let msg_len = u32::from_be_bytes($buffer[0..4].try_into()?) as usize;
-            let msgg_buf = & $buffer[4..4+msg_len];
-            <$type>::decode(msgg_buf)
         }
     };
 }

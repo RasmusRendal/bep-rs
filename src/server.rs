@@ -16,6 +16,7 @@ pub struct Server {
     state: BepState,
 }
 
+/// Receive some messages from a new client, and print them
 fn handle_connection(stream: &mut TcpStream) -> Result<i32, Box<dyn Error>> {
     //let mut buffer = Vec::new();
     let mut hello_buffer: [u8;4] = [0;4];
@@ -36,6 +37,7 @@ fn handle_connection(stream: &mut TcpStream) -> Result<i32, Box<dyn Error>> {
     Ok(1)
 }
 
+/// Listen for connections at address, printing whatever the client sends us
 fn run_server(address: String) -> Result<i32, Box<dyn Error>> {
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(128);
