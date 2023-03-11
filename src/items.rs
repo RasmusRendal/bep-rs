@@ -1,3 +1,9 @@
+use tokio::net::TcpStream;
+use std::io::{self, Read};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use prost::Message;
+use log::{info, warn, error, debug};
+
 include!(concat!(env!("OUT_DIR"), "/beercanlib.items.rs"));
 
 /// Write a message defined in items.proto to the given stream
@@ -6,12 +12,11 @@ macro_rules! send_message {
     ( $msg:expr, $stream:expr )  => {
         {
             let mut msg_len: [u8;8] = $msg.encoded_len().to_be_bytes();
-            $stream.write(&mut msg_len[1..4])?;
+            $stream.write_all(&mut msg_len[1..4]).await?;
             let mut buf: Vec<u8> = Vec::new();
             buf.reserve_exact($msg.encoded_len());
             let mut buf = $msg.encode_length_delimited_to_vec();
-            $stream.write(&mut buf)?;
-
+            $stream.write_all(&mut buf).await?;
         }
     };
 }
@@ -34,13 +39,6 @@ macro_rules! receive_message {
         }
     };
 }
-
-use tokio::net::TcpStream;
-use std::io::{self, Read};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use prost::Message;
-use log::{info, warn, error, debug};
-
 // TODO: Stop returning integers constantly, figure out how to have a result return type with
 // void/error
 /// Given a socket, send a BEP hello message

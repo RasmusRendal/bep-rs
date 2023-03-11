@@ -16,6 +16,14 @@ pub struct Server {
 /// Receive some messages from a new client, and print them
 async fn handle_connection(stream: &mut TcpStream) -> io::Result<()> {
     items::exchange_hellos(stream).await?;
+    let request = receive_message!(items::Request, stream)?;
+    if request.name == "testfile" {
+        let response = items::Response {id: request.id, data: "hello world".to_string().into_bytes(), code: 0 };
+        send_message!(response, stream);
+    } else {
+        let response = items::Response {id: request.id, data: vec![], code: 2 };
+        send_message!(response, stream);
+    }
     Ok(())
 }
 
