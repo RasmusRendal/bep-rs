@@ -13,6 +13,34 @@ pub struct BepState {
     connection: SqliteConnection,
 }
 
+
+/// A block of a file
+pub struct Block {
+    pub offset: u64,
+    pub size: u32,
+    pub hash: Vec<u8>,
+}
+
+/// A file that we should be syncing
+pub struct File {
+    pub name: String,
+    pub hash: Vec<u8>,
+    pub blocks: Vec<Block>,
+    // If I were writing C++, it would be handly to always be able to refer back
+    // to the parent when working with children of some objects. But that does
+    // not agree well with the Rust memory model. So for the moment, I'll just
+    // be passing a copy of the associated Directory with the File when needed
+    //pub directory: Box<&Directory>,
+}
+
+/// A directory that we should be syncing
+pub struct Directory {
+    pub id: String,
+    pub label: String,
+    pub path: PathBuf,
+    pub files: Vec<File>
+}
+
 impl BepState {
 
     /// Initialize the state. It tries to read a database
@@ -41,9 +69,9 @@ impl BepState {
     }
 
     /// Get list of directories to be synced
-    pub fn get_sync_directories(&mut self) -> Vec<SyncFolder> {
+    pub fn get_sync_directories(&mut self) -> Vec<Directory> {
         use super::schema::sync_folders::dsl::*;
-        sync_folders.load::<SyncFolder>(&mut self.connection).unwrap_or(Vec::new())
+        sync_folders.load::<SyncFolder>(&mut self.connection).unwrap_or(Vec::new()).iter().map(|x| Directory {id: "hello".to_string(), label: "hello".to_string(), path: PathBuf::from(x.dir_path.clone()), files: vec![]}).collect::<Vec<_>>()
     }
 
     /// Get list of peers to the client

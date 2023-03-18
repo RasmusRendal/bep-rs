@@ -26,7 +26,7 @@ enum ErrorCode {
 }
 
 message Header {
-    MessageType        typee        = 1;
+    MessageType        type        = 1;
     MessageCompression compression = 2;
 }
 
