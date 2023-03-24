@@ -35,9 +35,4 @@ diesel::joinable!(folder_shares -> peers (peer_id));
 diesel::joinable!(folder_shares -> sync_folders (sync_folder_id));
 diesel::joinable!(peer_addresses -> peers (peer_id));
 
-diesel::allow_tables_to_appear_in_same_query!(
-    folder_shares,
-    peer_addresses,
-    peers,
-    sync_folders,
-);
+diesel::allow_tables_to_appear_in_same_query!(folder_shares, peer_addresses, peers, sync_folders,);

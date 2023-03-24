@@ -1,44 +1,45 @@
+use super::bep_state::{self, BepState, Directory};
+use super::models::Peer;
+use log;
 use std::error::Error;
+use std::io;
 use std::{thread, time};
-use super::bep_state::{self, BepState};
-use std::io::{self, Write, Read};
-use log::{info, warn, error};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use std::path::PathBuf;
-use std::fs::File;
-use super::commands;
 
 use tokio::net::TcpStream;
 
-use prost::Message;
+use super::peer_connection::PeerConnection;
+use std::sync::{Arc, Mutex};
 
 pub struct Daemon {
-    state: BepState,
+    state: Arc<Mutex<BepState>>,
 }
 
-use super::items;
-
 /// Try and connect to the server at addr
-async fn connect_to_server(state: &mut BepState, addr: String) -> io::Result<()> {
-    info!(target: "Daemon", "");
-    info!(target: "Daemon", "Connecting to {addr}");
+async fn connect_to_server(sync_directories: Vec<Directory>, addr: String) -> io::Result<()> {
+    log::info!(target: "Daemon", "");
+    log::info!(target: "Daemon", "Connecting to {addr}");
 
-    let mut stream = TcpStream::connect(addr).await?;
-    items::exchange_hellos(&mut stream).await?;
-
-    for folder in state.get_sync_directories() {
-        info!("Syncing directory {}!", folder.label);
-        let file = bep_state::File { name: "testfile".to_string(), hash: vec![], blocks: vec![]};
-        commands::get_file(&mut stream, &folder, &file).await?;
-        info!("Synced file {}!", file.name);
+    let stream = TcpStream::connect(addr).await?;
+    let mut connection = PeerConnection::new(stream);
+    loop {
+        let dirs = sync_directories.clone();
+        for folder in dirs {
+            let file = bep_state::File {
+                name: "testfile".to_string(),
+                hash: vec![],
+                blocks: vec![],
+            };
+            connection.get_file(&folder, &file).await?;
+        }
+        thread::sleep(time::Duration::from_millis(2000));
     }
-
-    Ok(())
 }
 
 impl Daemon {
     pub fn new(state: BepState) -> Self {
-        Daemon { state }
+        Daemon {
+            state: Arc::new(Mutex::new(state)),
+        }
     }
 
     /// Runs the Daemon
@@ -46,14 +47,29 @@ impl Daemon {
     /// Currently, the daemon simply tries to connect to every peer,
     /// as defined by the client state, in a loop
     pub fn run(&mut self) -> Result<i32, Box<dyn Error>> {
+        let mut sync_directories = vec![];
+        if let Ok(mut d) = self.state.lock() {
+            sync_directories = d.get_sync_directories();
+        }
         loop {
-            for peer in self.state.get_peers() {
-                for addr in self.state.get_addresses(peer) {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .unwrap();
-                    rt.block_on(async { connect_to_server(&mut self.state, addr).await })?;
+            let mut peers: Option<Vec<Peer>> = None;
+            if let Ok(mut l) = self.state.lock() {
+                peers = Some(l.get_peers());
+            }
+            if let Some(list) = peers {
+                for peer in list {
+                    let mut addrs: Option<Vec<String>> = None;
+                    if let Ok(mut l) = self.state.lock() {
+                        addrs = Some(l.get_addresses(peer));
+                    } else {
+                        continue;
+                    }
+
+                    for addr in addrs.unwrap() {
+                        let c = sync_directories.clone();
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async { connect_to_server(c, addr).await })?;
+                    }
                 }
             }
             thread::sleep(time::Duration::from_millis(2000));
