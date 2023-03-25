@@ -268,7 +268,7 @@ impl PeerConnection {
                 "Got out of order Response",
             ));
         }
-        if message.code != 0 {
+        if message.code != items::ErrorCode::NoError as i32 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Got error on file request, and I don't know how to handle errors.",
