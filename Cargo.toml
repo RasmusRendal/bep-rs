@@ -14,6 +14,7 @@ rustls = "0.20.8"
 prost = "0.11"
 prost-types = "0.11"
 log = "0.4"
+env_logger = "0.10.0"
 
 [build-dependencies]
 prost-build = "0.11"

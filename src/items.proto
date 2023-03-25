@@ -51,3 +51,7 @@ message Hello {
     string client_name    = 2;
     string client_version = 3;
 }
+
+message Close {
+    string reason = 1;
+}

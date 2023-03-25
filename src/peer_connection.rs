@@ -129,13 +129,18 @@ async fn handle_messages(
                 "Peer is trying to use compression, but we do not support it",
             ));
         }
-        if header.r#type == 3 {
+        if header.r#type == items::MessageType::Request as i32 {
             log::info!("Handling request");
             let r2 = r2.clone();
             let txc = tx.clone();
             handle_request(stream, r2, txc).await?;
         } else if header.r#type == items::MessageType::Response as i32 {
             handle_response(stream, r2.clone()).await?;
+        } else if header.r#type == items::MessageType::Close as i32 {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "Connection was closed",
+            ));
         } else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -176,7 +181,8 @@ async fn handle_connection(
     receiver: Arc<Mutex<Receiver<PeerRequest>>>,
     tx: Sender<PeerRequest>,
 ) -> io::Result<()> {
-    items::exchange_hellos(&mut stream).await?;
+    let hello = items::exchange_hellos(&mut stream).await?;
+    log::info!("Received hello from {}", hello.client_name);
     let requests: Arc<Mutex<Vec<PeerRequest>>> = Arc::new(Mutex::new(vec![]));
     let (mut rd, wr) = tokio::io::split(stream);
 
@@ -276,5 +282,46 @@ impl PeerConnection {
         o.write_all(message.data.as_slice())?;
         Ok(())
     }
+
+    pub fn close(&mut self) -> io::Result<()> {
+        log::info!("Connection close requested");
+        let header = items::Header {
+            r#type: items::MessageType::Request as i32,
+            compression: items::MessageCompression::r#None as i32,
+        };
+        let message = items::Close {
+            reason: "Exit by user".to_string(),
+        };
+        let mut message_buffer: Vec<u8> = Vec::new();
+        message_buffer.extend_from_slice(&u16::to_be_bytes(header.encoded_len() as u16));
+        message_buffer.append(&mut header.encode_to_vec());
+        message_buffer.extend_from_slice(&u32::to_be_bytes(message.encoded_len() as u32));
+        message_buffer.append(&mut message.encode_to_vec());
+        let request = PeerRequest {
+            id: -1,
+            msg: message_buffer.clone(),
+            inner: None,
+        };
+        if let Err(e) = self.tx.send(request) {
+            log::error!("Received error from buffer: {}", e);
+            return Err(io::Error::new(io::ErrorKind::Other, "Error in buffer"));
+        }
+        Ok(())
+    }
 }
 
+#[cfg(test)]
+mod tests {
+    // Note this useful idiom: importing names from outer (for mod tests) scope.
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_add() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        log::info!("starting test");
+        let (client, server) = tokio::io::duplex(64);
+        let mut connection1 = PeerConnection::new(client);
+        let _connection2 = PeerConnection::new(server);
+        assert!(connection1.close().is_ok());
+    }
+}
