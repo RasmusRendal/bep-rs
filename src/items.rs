@@ -38,7 +38,7 @@ macro_rules! receive_message {
 // TODO: Stop returning integers constantly, figure out how to have a result return type with
 // void/error
 /// Given a socket, send a BEP hello message
-pub async fn send_hello(socket: &mut TcpStream) -> io::Result<()> {
+pub async fn send_hello(socket: &mut (impl AsyncWriteExt + Unpin)) -> io::Result<()> {
     let magic = (0x2EA7D90B as u32).to_be_bytes().to_vec();
     socket.write_all(&magic).await?;
 
@@ -54,7 +54,7 @@ pub async fn send_hello(socket: &mut TcpStream) -> io::Result<()> {
     Ok(())
 }
 
-pub async fn receive_hello(socket: &mut TcpStream) -> io::Result<()> {
+pub async fn receive_hello(socket: &mut (impl AsyncReadExt + Unpin)) -> io::Result<Hello> {
     let mut hello_buffer: [u8; 4] = [0; 4];
     socket.read_exact(&mut hello_buffer).await?;
     let magic = u32::from_be_bytes(hello_buffer);
@@ -71,14 +71,12 @@ pub async fn receive_hello(socket: &mut TcpStream) -> io::Result<()> {
         ));
     }
 
-    let hello = receive_message!(Hello, socket)?;
-
-    log::info!("Received hello from {}: {:?}", socket.peer_addr()?, hello);
-    Ok(())
+    Ok(receive_message!(Hello, socket)?)
 }
 
-pub async fn exchange_hellos(socket: &mut TcpStream) -> io::Result<()> {
+pub async fn exchange_hellos(
+    socket: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
+) -> io::Result<Hello> {
     send_hello(socket).await?;
-    receive_hello(socket).await?;
-    Ok(())
+    Ok(receive_hello(socket).await?)
 }

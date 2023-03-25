@@ -10,7 +10,10 @@ use std::io::{self, Write};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::net::TcpStream;
+
+// TODO: When this rust PR lands
+// https://github.com/rust-lang/rust/issues/63063
+//type Stream = (impl AsyncWriteExt+AsyncReadExt+Unpin+Send+'static);
 
 /// When a connection is established to a peer, this class
 /// should take over the socket. It creates its own thread
@@ -39,7 +42,7 @@ struct PeerRequest {
 /// Call this function when the client has indicated it want to send a Request
 /// At the moment, it always responds with a hardcoded file
 async fn handle_request(
-    stream: &mut ReadHalf<TcpStream>,
+    stream: &mut ReadHalf<impl AsyncReadExt>,
     _requests: Arc<Mutex<Vec<PeerRequest>>>,
     tx: Sender<PeerRequest>,
 ) -> io::Result<()> {
@@ -82,7 +85,7 @@ async fn handle_request(
 }
 
 async fn handle_response(
-    stream: &mut ReadHalf<TcpStream>,
+    stream: &mut ReadHalf<impl AsyncReadExt>,
     requests: Arc<Mutex<Vec<PeerRequest>>>,
 ) -> io::Result<()> {
     let response = receive_message!(items::Response, stream)?;
@@ -109,7 +112,7 @@ async fn handle_response(
 
 /// The main function of the server. Decode a message, and handle it accordingly
 async fn handle_messages(
-    stream: &mut ReadHalf<TcpStream>,
+    stream: &mut ReadHalf<impl AsyncReadExt>,
     requests: Arc<Mutex<Vec<PeerRequest>>>,
     tx: Sender<PeerRequest>,
 ) -> io::Result<()> {
@@ -143,7 +146,7 @@ async fn handle_messages(
 }
 
 async fn handle_writing(
-    mut wr: WriteHalf<TcpStream>,
+    mut wr: WriteHalf<impl AsyncWriteExt>,
     requests: Arc<Mutex<Vec<PeerRequest>>>,
     receiver: Arc<Mutex<Receiver<PeerRequest>>>,
 ) -> io::Result<()> {
@@ -169,7 +172,7 @@ async fn handle_writing(
 /// If as a result of receiving a message, the server wants to transmit something,
 /// it simply adds is to the tx queue
 async fn handle_connection(
-    mut stream: TcpStream,
+    mut stream: (impl AsyncWriteExt + AsyncReadExt + Unpin + std::marker::Send + 'static),
     receiver: Arc<Mutex<Receiver<PeerRequest>>>,
     tx: Sender<PeerRequest>,
 ) -> io::Result<()> {
@@ -194,7 +197,7 @@ impl PeerConnection {
         self.is_alive
     }
 
-    pub fn new(socket: TcpStream) -> Self {
+    pub fn new(socket: (impl AsyncWriteExt + AsyncReadExt + Unpin + Send + 'static)) -> Self {
         log::info!("New connection");
         let (tx, rx) = channel();
         let txc = tx.clone();
@@ -274,3 +277,4 @@ impl PeerConnection {
         Ok(())
     }
 }
+
