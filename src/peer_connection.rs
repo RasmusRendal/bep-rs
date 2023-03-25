@@ -87,20 +87,21 @@ async fn handle_response(
 ) -> io::Result<()> {
     let response = receive_message!(items::Response, stream)?;
     log::info!("Received response for request {}", response.id);
-    if let Ok(reqlist) = requests.lock() {
-        for req in reqlist.iter() {
-            if req.id == response.id {
-                // This unwrap should be safe
-                // If inner is None, it should not be added to the vector
-                if let Ok(tx) = req.inner.as_ref().unwrap().try_lock() {
-                    if let Err(e) = tx.send(response) {
-                        return Err(io::Error::new(io::ErrorKind::Other, "Got a sending error"));
-                    }
-                    break;
-                } else {
-                    return Err(io::Error::new(io::ErrorKind::Other, "Could not lock"));
+    if let Ok(mut reqlist) = requests.lock() {
+        if let Some(index) = reqlist.iter().position(|x| x.id == response.id) {
+            let request = &reqlist[index];
+            // This unwrap should be safe
+            // If inner is None, it should not be added to the vector
+            assert!(request.inner.is_some());
+            if let Ok(tx) = request.inner.as_ref().unwrap().try_lock() {
+                if let Err(e) = tx.send(response) {
+                    log::error!("Error using sender {}", e);
+                    return Err(io::Error::new(io::ErrorKind::Other, "Got a sending error"));
                 }
+            } else {
+                return Err(io::Error::new(io::ErrorKind::Other, "Could not lock"));
             }
+            reqlist.remove(index);
         }
     }
     Ok(())
