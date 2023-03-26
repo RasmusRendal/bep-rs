@@ -1,10 +1,10 @@
 use super::bep_state;
-use super::items;
-use super::peer_connection_inner::{
-    handle_connection, PeerConnectionInner, PeerRequest, PeerRequestResponseType,
-};
+#[macro_use]
+mod items;
+mod peer_connection_inner;
 use futures::channel::oneshot;
 use log;
+use peer_connection_inner::{handle_connection, PeerConnectionInner, PeerRequestResponseType};
 use prost::Message;
 use rand::distributions::Standard;
 use rand::rngs::StdRng;
@@ -153,7 +153,7 @@ mod tests {
     // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_open_close() -> io::Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
         let (client, server) = tokio::io::duplex(64);
