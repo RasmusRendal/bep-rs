@@ -1,10 +1,10 @@
-use log;
 use prost::Message;
-use std::io::{self, Read};
+use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 include!(concat!(env!("OUT_DIR"), "/beercanlib.items.rs"));
+
+const HELLO_MAGIC: u32 = 0x2EA7D90B_u32;
 
 /// Write a message defined in items.proto to the given stream
 #[macro_export]
@@ -39,7 +39,7 @@ macro_rules! receive_message {
 // void/error
 /// Given a socket, send a BEP hello message
 pub async fn send_hello(socket: &mut (impl AsyncWriteExt + Unpin)) -> io::Result<()> {
-    let magic = (0x2EA7D90B as u32).to_be_bytes().to_vec();
+    let magic = HELLO_MAGIC.to_be_bytes().to_vec();
     socket.write_all(&magic).await?;
 
     let hello = Hello {
@@ -63,7 +63,7 @@ pub async fn receive_hello(socket: &mut (impl AsyncReadExt + Unpin)) -> io::Resu
             io::ErrorKind::InvalidData,
             "Did not receive any magic bytes",
         ));
-    } else if magic != 0x2EA7D90B {
+    } else if magic != HELLO_MAGIC {
         log::error!("Invalid magic bytes: {:X}, {magic}", magic);
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -78,5 +78,5 @@ pub async fn exchange_hellos(
     socket: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
 ) -> io::Result<Hello> {
     send_hello(socket).await?;
-    Ok(receive_hello(socket).await?)
+    receive_hello(socket).await
 }

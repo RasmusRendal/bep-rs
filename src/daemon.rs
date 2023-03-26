@@ -58,14 +58,9 @@ impl Daemon {
             }
             if let Some(list) = peers {
                 for peer in list {
-                    let mut addrs: Option<Vec<String>> = None;
-                    if let Ok(mut l) = self.state.lock() {
-                        addrs = Some(l.get_addresses(peer));
-                    } else {
-                        continue;
-                    }
+                    let addrs = self.state.lock().unwrap().get_addresses(peer);
 
-                    for addr in addrs.unwrap() {
+                    for addr in addrs {
                         let c = sync_directories.clone();
                         let rt = tokio::runtime::Runtime::new().unwrap();
                         rt.block_on(async { connect_to_server(c, addr).await })?;

@@ -13,7 +13,6 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 // TODO: When this rust PR lands
 // https://github.com/rust-lang/rust/issues/63063
@@ -190,7 +189,7 @@ async fn handle_writing(
             }
         }
         if let Some(msg) = content {
-            wr.write_all(&*msg).await?;
+            wr.write_all(&msg).await?;
         }
         if close {
             wr.shutdown().await?;
@@ -235,8 +234,8 @@ async fn handle_connection(
 
     let keys: Vec<i32> = r2
         .try_lock()
-        .map(|x| x.keys().map(|y| y.clone()).collect())
-        .unwrap_or(Vec::new());
+        .map(|x| x.keys().copied().collect())
+        .unwrap_or_default();
     let mut l = r2.lock().unwrap();
     log::info!("locked");
     for k in keys {
@@ -250,7 +249,7 @@ async fn handle_connection(
         assert!(s.is_ok());
     }
     log::info!("returned");
-    return Ok(());
+    Ok(())
 }
 
 impl PeerConnection {
@@ -365,12 +364,12 @@ impl PeerConnection {
         }
         let response = rx.await;
         if let Err(e) = response {
+            log::error!("Connection was closed: {}", e);
             return Err(io::Error::new(
                 io::ErrorKind::ConnectionAborted,
                 "Connection was aborted",
             ));
         }
-        //assert!(response.is_ok());
         Ok(())
     }
 }

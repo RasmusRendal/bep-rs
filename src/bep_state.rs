@@ -77,7 +77,7 @@ impl BepState {
         use super::schema::sync_folders::dsl::*;
         sync_folders
             .load::<SyncFolder>(&mut self.connection)
-            .unwrap_or(Vec::new())
+            .unwrap_or_default()
             .iter()
             .map(|x| Directory {
                 id: "hello".to_string(),
@@ -91,9 +91,7 @@ impl BepState {
     /// Get list of peers to the client
     pub fn get_peers(&mut self) -> Vec<Peer> {
         use super::schema::peers::dsl::*;
-        peers
-            .load::<Peer>(&mut self.connection)
-            .unwrap_or(Vec::new())
+        peers.load::<Peer>(&mut self.connection).unwrap_or_default()
     }
 
     /// Get the list of addressess associated wit hsome peer
@@ -102,7 +100,7 @@ impl BepState {
         PeerAddress::belonging_to(&peer)
             .select(address)
             .load::<String>(&mut self.connection)
-            .unwrap_or(Vec::new())
+            .unwrap_or_default()
     }
 
     /// Stop syncing some directory
