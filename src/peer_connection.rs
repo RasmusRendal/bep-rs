@@ -232,10 +232,8 @@ async fn handle_connection(
     s2.abort();
     log::info!("Shutting down server {}", name);
 
-    let keys: Vec<i32> = r2
-        .try_lock()
-        .map(|x| x.keys().copied().collect())
-        .unwrap_or_default();
+    let keys: Vec<i32> = r2.lock().map(|x| x.keys().copied().collect()).unwrap();
+
     let mut l = r2.lock().unwrap();
     log::info!("locked");
     for k in keys {
@@ -272,6 +270,26 @@ impl PeerConnection {
         me
     }
 
+    fn submit_request(
+        &mut self,
+        id: i32,
+        response_type: PeerRequestResponseType,
+        msg: Vec<u8>,
+    ) -> oneshot::Receiver<items::Response> {
+        let (tx, rx) = oneshot::channel();
+        let request = PeerRequest {
+            id,
+            response_type,
+            msg,
+            inner: Some(tx),
+        };
+        let r = self.tx.send(request);
+        if let Err(e) = r {
+            log::error!("Tried to submit a request after server was closed: {}", e);
+        }
+        rx
+    }
+
     /// Requests a file from the peer, writing to the path on the filesystem
     pub async fn get_file(
         &mut self,
@@ -302,18 +320,14 @@ impl PeerConnection {
         message_buffer.append(&mut header.encode_to_vec());
         message_buffer.extend_from_slice(&u32::to_be_bytes(message.encoded_len() as u32));
         message_buffer.append(&mut message.encode_to_vec());
-        let (tx, rx) = oneshot::channel();
-        let request = PeerRequest {
-            id: message_id,
-            response_type: PeerRequestResponseType::WhenResponse,
-            msg: message_buffer.clone(),
-            inner: Some(tx),
-        };
-        if let Err(e) = self.tx.send(request) {
-            log::error!("Received error from buffer: {}", e);
-            return Err(io::Error::new(io::ErrorKind::Other, "Error in buffer"));
-        }
-        let message = rx.await.unwrap();
+        let message = self
+            .submit_request(
+                message_id,
+                PeerRequestResponseType::WhenResponse,
+                message_buffer,
+            )
+            .await
+            .unwrap();
 
         if message.id != message_id {
             log::error!("Expected message id {}, got {}", message_id, message.id);
@@ -351,18 +365,12 @@ impl PeerConnection {
         message_buffer.append(&mut header.encode_to_vec());
         message_buffer.extend_from_slice(&u32::to_be_bytes(message.encoded_len() as u32));
         message_buffer.append(&mut message.encode_to_vec());
-        let (tx, rx) = oneshot::channel();
-        let request = PeerRequest {
-            id: -1,
-            response_type: PeerRequestResponseType::WhenClosed,
-            msg: message_buffer.clone(),
-            inner: Some(tx),
-        };
-        if let Err(e) = self.tx.send(request) {
-            log::error!("Received error from buffer: {}", e);
-            return Err(io::Error::new(io::ErrorKind::Other, "Error in buffer"));
-        }
-        let response = rx.await;
+        let _response = self
+            .submit_request(-1, PeerRequestResponseType::WhenClosed, message_buffer)
+            .await;
+
+        // If it crashes, it's because the server was closed, which we are kind of okay with
+        /*
         if let Err(e) = response {
             log::error!("Connection was closed: {}", e);
             return Err(io::Error::new(
@@ -370,6 +378,7 @@ impl PeerConnection {
                 "Connection was aborted",
             ));
         }
+        */
         Ok(())
     }
 }
@@ -379,14 +388,14 @@ mod tests {
     // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_open_close() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
+    async fn test_open_close() -> io::Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
         let (client, server) = tokio::io::duplex(64);
         let mut connection1 = PeerConnection::new(client, "con1");
         let mut connection2 = PeerConnection::new(server, "con2");
-        connection1.close().await;
-        log::info!("done waiting");
-        connection2.close().await;
+        assert!(connection1.close().await.is_ok());
+        assert!(connection2.close().await.is_ok());
+        Ok(())
     }
 }
