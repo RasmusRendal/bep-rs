@@ -18,7 +18,7 @@ async fn run_server(address: String) -> io::Result<()> {
     loop {
         let (socket, _) = listener.accept().await?;
 
-        PeerConnection::new(socket);
+        PeerConnection::new(socket, "server");
     }
 }
 

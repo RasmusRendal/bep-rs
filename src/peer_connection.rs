@@ -1,15 +1,19 @@
 use super::bep_state;
 use super::items;
+use futures::channel::oneshot;
 use log;
 use prost::Message;
 use rand::distributions::Standard;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Write};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 // TODO: When this rust PR lands
 // https://github.com/rust-lang/rust/issues/63063
@@ -28,24 +32,32 @@ pub struct PeerConnection {
     tx: Sender<PeerRequest>,
 }
 
+#[derive(Clone, PartialEq)]
+enum PeerRequestResponseType {
+    None,
+    WhenSent,
+    WhenClosed,
+    WhenResponse,
+}
+
 /// Encapsulates something that the peer connection should
 /// transmit over TCP. The optional `inner` lets you
 /// encapsulate a channel, over which you would like to be
 /// notified when a response is sent.
-#[derive(Clone)]
 struct PeerRequest {
     id: i32,
+    response_type: PeerRequestResponseType,
     msg: Vec<u8>,
-    inner: Option<Arc<Mutex<Sender<items::Response>>>>,
+    inner: Option<oneshot::Sender<items::Response>>,
 }
 
 /// Call this function when the client has indicated it want to send a Request
 /// At the moment, it always responds with a hardcoded file
 async fn handle_request(
     stream: &mut ReadHalf<impl AsyncReadExt>,
-    _requests: Arc<Mutex<Vec<PeerRequest>>>,
+    _requests: Arc<Mutex<HashMap<i32, PeerRequest>>>,
     tx: Sender<PeerRequest>,
-) -> io::Result<()> {
+) -> tokio::io::Result<()> {
     let request = receive_message!(items::Request, stream)?;
     log::info!("Received request {:?}", request);
     let response = if request.name == "testfile" {
@@ -75,10 +87,12 @@ async fn handle_request(
     // Garbage channel for now
     let pr = PeerRequest {
         id: -1,
+        response_type: PeerRequestResponseType::None,
         msg: message_buffer,
         inner: None,
     };
-    tx.send(pr);
+    let r = tx.send(pr);
+    assert!(r.is_ok());
 
     log::info!("Finished handling request");
     Ok(())
@@ -86,26 +100,14 @@ async fn handle_request(
 
 async fn handle_response(
     stream: &mut ReadHalf<impl AsyncReadExt>,
-    requests: Arc<Mutex<Vec<PeerRequest>>>,
-) -> io::Result<()> {
+    requests: Arc<Mutex<HashMap<i32, PeerRequest>>>,
+) -> tokio::io::Result<()> {
     let response = receive_message!(items::Response, stream)?;
     log::info!("Received response for request {}", response.id);
-    if let Ok(mut reqlist) = requests.lock() {
-        if let Some(index) = reqlist.iter().position(|x| x.id == response.id) {
-            let request = &reqlist[index];
-            // This unwrap should be safe
-            // If inner is None, it should not be added to the vector
-            assert!(request.inner.is_some());
-            if let Ok(tx) = request.inner.as_ref().unwrap().try_lock() {
-                if let Err(e) = tx.send(response) {
-                    log::error!("Error using sender {}", e);
-                    return Err(io::Error::new(io::ErrorKind::Other, "Got a sending error"));
-                }
-            } else {
-                return Err(io::Error::new(io::ErrorKind::Other, "Could not lock"));
-            }
-            reqlist.remove(index);
-        }
+    if let Some(peer_request) = requests.lock().unwrap().remove(&response.id) {
+        assert!(peer_request.inner.is_some());
+        let r = peer_request.inner.unwrap().send(response);
+        assert!(r.is_ok());
     }
     Ok(())
 }
@@ -113,13 +115,13 @@ async fn handle_response(
 /// The main function of the server. Decode a message, and handle it accordingly
 async fn handle_messages(
     stream: &mut ReadHalf<impl AsyncReadExt>,
-    requests: Arc<Mutex<Vec<PeerRequest>>>,
+    requests: Arc<Mutex<HashMap<i32, PeerRequest>>>,
     tx: Sender<PeerRequest>,
-) -> io::Result<()> {
-    log::info!("Handle messages function called");
+) -> tokio::io::Result<()> {
     let r2 = requests.clone();
     loop {
-        let header_len = stream.read_u16().await? as usize;
+        let header_len = tokio::time::timeout(Duration::from_millis(1000 * 3), stream.read_u16())
+            .await?? as usize;
         let mut header = vec![0u8; header_len];
         stream.read_exact(&mut header).await?;
         let header = items::Header::decode(&*header)?;
@@ -137,6 +139,8 @@ async fn handle_messages(
         } else if header.r#type == items::MessageType::Response as i32 {
             handle_response(stream, r2.clone()).await?;
         } else if header.r#type == items::MessageType::Close as i32 {
+            let close = receive_message!(items::Close, stream)?;
+            log::info!("Peer requested close. Reason: {}", close.reason);
             return Err(io::Error::new(
                 io::ErrorKind::ConnectionReset,
                 "Connection was closed",
@@ -152,23 +156,45 @@ async fn handle_messages(
 
 async fn handle_writing(
     mut wr: WriteHalf<impl AsyncWriteExt>,
-    requests: Arc<Mutex<Vec<PeerRequest>>>,
+    requests: Arc<Mutex<HashMap<i32, PeerRequest>>>,
     receiver: Arc<Mutex<Receiver<PeerRequest>>>,
-) -> io::Result<()> {
-    log::info!("Spawn 2 success");
+) -> tokio::io::Result<()> {
     loop {
-        let mut msg: Option<PeerRequest> = None;
-        if let Ok(Ok(message)) = receiver.try_lock().map(|l| l.try_recv()) {
-            msg = Some(message.clone());
-        }
-        if let Some(m) = msg {
-            log::info!("Sending message with id {}", m.id);
-            wr.write_all(&*m.msg).await?;
-            if m.inner.is_some() {
-                if let Ok(mut l) = requests.lock() {
-                    l.push(m);
+        let mut content: Option<Vec<u8>> = None;
+        let mut close = false;
+        {
+            if let Ok(msg) = receiver.try_lock().map(|l| l.try_recv()) {
+                if msg.is_err() {
+                    continue;
+                }
+                let msg = msg.unwrap();
+
+                content = Some(msg.msg.clone());
+                if msg.response_type == PeerRequestResponseType::WhenSent {
+                    let r = items::Response {
+                        id: -1,
+                        data: "hello world".to_string().into_bytes(),
+                        code: 0,
+                    };
+                    let m = msg.inner.unwrap().send(r);
+                    assert!(m.is_ok());
+                } else if msg.response_type == PeerRequestResponseType::WhenClosed {
+                    close = true;
+                } else if msg.response_type == PeerRequestResponseType::WhenResponse {
+                    if msg.inner.is_some() {
+                        if let Ok(mut l) = requests.lock() {
+                            l.insert(msg.id, msg);
+                        }
+                    }
                 }
             }
+        }
+        if let Some(msg) = content {
+            wr.write_all(&*msg).await?;
+        }
+        if close {
+            wr.shutdown().await?;
+            return Ok(());
         }
     }
 }
@@ -180,21 +206,50 @@ async fn handle_connection(
     mut stream: (impl AsyncWriteExt + AsyncReadExt + Unpin + std::marker::Send + 'static),
     receiver: Arc<Mutex<Receiver<PeerRequest>>>,
     tx: Sender<PeerRequest>,
-) -> io::Result<()> {
+    name: &'static str,
+) -> tokio::io::Result<()> {
     let hello = items::exchange_hellos(&mut stream).await?;
     log::info!("Received hello from {}", hello.client_name);
-    let requests: Arc<Mutex<Vec<PeerRequest>>> = Arc::new(Mutex::new(vec![]));
+    let requests: Arc<Mutex<HashMap<i32, PeerRequest>>> = Arc::new(Mutex::new(HashMap::new()));
     let (mut rd, wr) = tokio::io::split(stream);
 
+    // TODO: More graceful shutdown that abort
+    let (shutdown_send, mut shutdown_recv) = tokio::sync::mpsc::unbounded_channel::<()>();
+
     let r = requests.clone();
-    let s1 = tokio::spawn(async move { handle_messages(&mut rd, r, tx).await });
+    let r2 = requests.clone();
+    let sendclone = shutdown_send.clone();
+    let s1 = tokio::spawn(async move {
+        handle_messages(&mut rd, r, tx).await;
+        sendclone.send(());
+    });
+    let sendclone = shutdown_send.clone();
+    let s2 = tokio::spawn(async move {
+        handle_writing(wr, requests, receiver).await;
+        sendclone.send(());
+    });
+    shutdown_recv.recv().await;
+    s1.abort();
+    s2.abort();
+    log::info!("Shutting down server {}", name);
 
-    let s2 = tokio::spawn(async move { handle_writing(wr, requests, receiver).await });
-
-    let result = tokio::try_join!(s1, s2)?;
-    result.0?;
-    result.1?;
-
+    let keys: Vec<i32> = r2
+        .try_lock()
+        .map(|x| x.keys().map(|y| y.clone()).collect())
+        .unwrap_or(Vec::new());
+    let mut l = r2.lock().unwrap();
+    log::info!("locked");
+    for k in keys {
+        let r = l.remove(&k).unwrap();
+        let response = items::Response {
+            id: r.id,
+            data: "hello world".to_string().into_bytes(),
+            code: 0,
+        };
+        let s = r.inner.unwrap().send(response);
+        assert!(s.is_ok());
+    }
+    log::info!("returned");
     return Ok(());
 }
 
@@ -203,15 +258,15 @@ impl PeerConnection {
         self.is_alive
     }
 
-    pub fn new(socket: (impl AsyncWriteExt + AsyncReadExt + Unpin + Send + 'static)) -> Self {
-        log::info!("New connection");
+    pub fn new(
+        socket: (impl AsyncWriteExt + AsyncReadExt + Unpin + Send + 'static),
+        name: &'static str,
+    ) -> Self {
         let (tx, rx) = channel();
         let txc = tx.clone();
         let me = PeerConnection { is_alive: true, tx };
-        log::info!("The connection handler thread is a-runnin");
         tokio::spawn(async move {
-            log::info!("The connection handler thread is a-runnin");
-            if let Err(e) = handle_connection(socket, Arc::new(Mutex::new(rx)), txc).await {
+            if let Err(e) = handle_connection(socket, Arc::new(Mutex::new(rx)), txc, name).await {
                 log::error!("Error occured in client {}", e);
             }
         });
@@ -223,7 +278,7 @@ impl PeerConnection {
         &mut self,
         directory: &bep_state::Directory,
         sync_file: &bep_state::File,
-    ) -> io::Result<()> {
+    ) -> tokio::io::Result<()> {
         log::info!("Requesting file {}", sync_file.name);
 
         let header = items::Header {
@@ -248,18 +303,18 @@ impl PeerConnection {
         message_buffer.append(&mut header.encode_to_vec());
         message_buffer.extend_from_slice(&u32::to_be_bytes(message.encoded_len() as u32));
         message_buffer.append(&mut message.encode_to_vec());
-        let (tx, rx) = channel();
+        let (tx, rx) = oneshot::channel();
         let request = PeerRequest {
             id: message_id,
+            response_type: PeerRequestResponseType::WhenResponse,
             msg: message_buffer.clone(),
-            inner: Some(Arc::new(Mutex::new(tx))),
+            inner: Some(tx),
         };
         if let Err(e) = self.tx.send(request) {
             log::error!("Received error from buffer: {}", e);
             return Err(io::Error::new(io::ErrorKind::Other, "Error in buffer"));
         }
-        // TODO: Do something a bit more clever, maybe using a future
-        let message = rx.recv().unwrap();
+        let message = rx.await.unwrap();
 
         if message.id != message_id {
             log::error!("Expected message id {}, got {}", message_id, message.id);
@@ -283,10 +338,10 @@ impl PeerConnection {
         Ok(())
     }
 
-    pub fn close(&mut self) -> io::Result<()> {
+    pub async fn close(&mut self) -> tokio::io::Result<()> {
         log::info!("Connection close requested");
         let header = items::Header {
-            r#type: items::MessageType::Request as i32,
+            r#type: items::MessageType::Close as i32,
             compression: items::MessageCompression::r#None as i32,
         };
         let message = items::Close {
@@ -297,15 +352,25 @@ impl PeerConnection {
         message_buffer.append(&mut header.encode_to_vec());
         message_buffer.extend_from_slice(&u32::to_be_bytes(message.encoded_len() as u32));
         message_buffer.append(&mut message.encode_to_vec());
+        let (tx, rx) = oneshot::channel();
         let request = PeerRequest {
             id: -1,
+            response_type: PeerRequestResponseType::WhenClosed,
             msg: message_buffer.clone(),
-            inner: None,
+            inner: Some(tx),
         };
         if let Err(e) = self.tx.send(request) {
             log::error!("Received error from buffer: {}", e);
             return Err(io::Error::new(io::ErrorKind::Other, "Error in buffer"));
         }
+        let response = rx.await;
+        if let Err(e) = response {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "Connection was aborted",
+            ));
+        }
+        //assert!(response.is_ok());
         Ok(())
     }
 }
@@ -316,12 +381,13 @@ mod tests {
     use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_add() {
+    async fn test_open_close() {
         let _ = env_logger::builder().is_test(true).try_init();
-        log::info!("starting test");
         let (client, server) = tokio::io::duplex(64);
-        let mut connection1 = PeerConnection::new(client);
-        let _connection2 = PeerConnection::new(server);
-        assert!(connection1.close().is_ok());
+        let mut connection1 = PeerConnection::new(client, "con1");
+        let mut connection2 = PeerConnection::new(server, "con2");
+        connection1.close().await;
+        log::info!("done waiting");
+        connection2.close().await;
     }
 }
