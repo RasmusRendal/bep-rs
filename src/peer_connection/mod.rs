@@ -4,16 +4,15 @@ mod items;
 mod peer_connection_inner;
 use futures::channel::oneshot;
 use log;
-use peer_connection_inner::{handle_connection, PeerConnectionInner, PeerRequestResponseType};
+use peer_connection_inner::{
+    handle_connection, PeerConnectionInner, PeerRequestResponse, PeerRequestResponseType,
+};
 use prost::Message;
 use rand::distributions::Standard;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Write};
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 // TODO: When this rust PR lands
@@ -49,13 +48,13 @@ impl PeerConnection {
         me
     }
 
-    fn submit_request(
+    async fn submit_request(
         &mut self,
         id: i32,
         response_type: PeerRequestResponseType,
         msg: Vec<u8>,
-    ) -> oneshot::Receiver<items::Response> {
-        self.inner.submit_request(id, response_type, msg)
+    ) -> io::Result<PeerRequestResponse> {
+        self.inner.submit_request(id, response_type, msg).await
     }
 
     /// Requests a file from the peer, writing to the path on the filesystem
@@ -94,53 +93,50 @@ impl PeerConnection {
                 PeerRequestResponseType::WhenResponse,
                 message_buffer,
             )
-            .await
-            .unwrap();
+            .await?;
 
-        if message.code != items::ErrorCode::NoError as i32 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Got error on file request, and I don't know how to handle errors.",
-            ));
+        match message {
+            PeerRequestResponse::Response(response) => {
+                let mut file = directory.path.clone();
+                file.push(sync_file.name.clone());
+                log::info!("Writing to path {:?}", file);
+                let mut o = File::create(file)?;
+                o.write_all(response.data.as_slice())?;
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Got error on file request, and I don't know how to handle errors.",
+                ));
+            }
         }
-
-        let mut file = directory.path.clone();
-        file.push(sync_file.name.clone());
-        log::info!("Writing to path {:?}", file);
-        let mut o = File::create(file)?;
-        o.write_all(message.data.as_slice())?;
         Ok(())
     }
 
     pub async fn close(&mut self) -> tokio::io::Result<()> {
         log::info!("Connection close requested");
-        let header = items::Header {
-            r#type: items::MessageType::Close as i32,
-            compression: items::MessageCompression::r#None as i32,
-        };
-        let message = items::Close {
-            reason: "Exit by user".to_string(),
-        };
-        let mut message_buffer: Vec<u8> = Vec::new();
-        message_buffer.extend_from_slice(&u16::to_be_bytes(header.encoded_len() as u16));
-        message_buffer.append(&mut header.encode_to_vec());
-        message_buffer.extend_from_slice(&u32::to_be_bytes(message.encoded_len() as u32));
-        message_buffer.append(&mut message.encode_to_vec());
-        let _response = self
-            .submit_request(-1, PeerRequestResponseType::WhenClosed, message_buffer)
-            .await;
+        let response = self.inner.close().await?;
 
-        // If it crashes, it's because the server was closed, which we are kind of okay with
-        /*
-        if let Err(e) = response {
-            log::error!("Connection was closed: {}", e);
-            return Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "Connection was aborted",
-            ));
+        match response {
+            PeerRequestResponse::Closed => Ok(()),
+            PeerRequestResponse::Error(e) => {
+                log::error!(
+                    "{}: Got error while trying to close request: {}",
+                    self.inner.name,
+                    e
+                );
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Got an error while trying to close connection",
+                ));
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Invalid response to close request. This should not happen.",
+                ));
+            }
         }
-        */
-        Ok(())
     }
 
     pub fn get_peer_name(&self) -> Option<String> {
@@ -155,12 +151,13 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_open_close() -> io::Result<()> {
+        console_subscriber::init();
         let _ = env_logger::builder().is_test(true).try_init();
         let (client, server) = tokio::io::duplex(64);
         let mut connection1 = PeerConnection::new(client, "con1");
         let mut connection2 = PeerConnection::new(server, "con2");
-        assert!(connection1.close().await.is_ok());
-        assert!(connection2.close().await.is_ok());
+        connection1.close().await.unwrap();
+        connection2.close().await.unwrap();
         assert!(connection1.get_peer_name().unwrap() == "con2".to_string());
         assert!(connection2.get_peer_name().unwrap() == "con1".to_string());
         Ok(())

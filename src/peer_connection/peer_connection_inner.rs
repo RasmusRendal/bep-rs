@@ -4,50 +4,59 @@ use log;
 use prost::Message;
 use std::collections::HashMap;
 use std::io;
-use std::sync::mpsc::channel;
-use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::sync::mpsc::{
+    channel, unbounded_channel, Receiver, Sender, UnboundedReceiver, UnboundedSender,
+};
 
 #[derive(Clone, PartialEq)]
 pub enum PeerRequestResponseType {
     None,
-    WhenSent,
     WhenClosed,
     WhenResponse,
 }
 
-/// Encapsulates something that the peer connection should
-/// transmit over TCP. The optional `inner` lets you
-/// encapsulate a channel, over which you would like to be
-/// notified when a response is sent.
-pub struct PeerRequest {
+pub enum PeerRequestResponse {
+    Response(items::Response),
+    Error(String),
+    Sent,
+    Closed,
+}
+
+pub struct PeerRequestListener {
     pub id: i32,
     pub response_type: PeerRequestResponseType,
-    pub msg: Vec<u8>,
-    pub inner: Option<oneshot::Sender<items::Response>>,
+    pub inner: oneshot::Sender<PeerRequestResponse>,
 }
 
 /// Encapsulates the "inner" state of the PeerConnection
 #[derive(Clone)]
 pub struct PeerConnectionInner {
-    name: Arc<String>,
-    requests: Arc<Mutex<HashMap<i32, PeerRequest>>>,
+    pub name: Arc<String>,
+    requests: Arc<Mutex<HashMap<i32, PeerRequestListener>>>,
     hello: Arc<Mutex<Option<items::Hello>>>,
-    tx: Sender<PeerRequest>,
-    rx: Arc<Mutex<Receiver<PeerRequest>>>,
+    tx: Sender<Vec<u8>>,
+    // Receiver for messages that should be sent
+    // Should only be accessed by handle_writing
+    rx: Arc<tokio::sync::Mutex<Receiver<Vec<u8>>>>,
+    shutdown_send: UnboundedSender<()>,
+    shutdown_recv: Arc<tokio::sync::Mutex<UnboundedReceiver<()>>>,
 }
 
 impl PeerConnectionInner {
     pub fn new(name: String) -> Self {
-        let (tx, rx) = channel();
+        let (tx, rx) = channel(100);
+        let (shutdown_send, shutdown_recv) = tokio::sync::mpsc::unbounded_channel::<()>();
         PeerConnectionInner {
             name: Arc::new(name),
             requests: Arc::new(Mutex::new(HashMap::new())),
             hello: Arc::new(Mutex::new(None)),
             tx,
-            rx: Arc::new(Mutex::new(rx)),
+            rx: Arc::new(tokio::sync::Mutex::new(rx)),
+            shutdown_send,
+            shutdown_recv: Arc::new(tokio::sync::Mutex::new(shutdown_recv)),
         }
     }
 
@@ -59,14 +68,8 @@ impl PeerConnectionInner {
             .map(|x| x.device_name.clone())
     }
 
-    pub fn submit_message(&mut self, msg: Vec<u8>) {
-        let request = PeerRequest {
-            id: -1,
-            response_type: PeerRequestResponseType::None,
-            msg,
-            inner: None,
-        };
-        let r = self.tx.send(request);
+    pub async fn submit_message(&mut self, msg: Vec<u8>) {
+        let r = self.tx.send(msg).await;
         if let Err(e) = r {
             log::error!(
                 "{}: Tried to submit a request after server was closed: {}",
@@ -76,20 +79,22 @@ impl PeerConnectionInner {
         }
     }
 
-    pub fn submit_request(
+    pub async fn submit_request(
         &mut self,
         id: i32,
         response_type: PeerRequestResponseType,
         msg: Vec<u8>,
-    ) -> oneshot::Receiver<items::Response> {
+    ) -> io::Result<PeerRequestResponse> {
+        assert!(response_type != PeerRequestResponseType::None);
         let (tx, rx) = oneshot::channel();
-        let request = PeerRequest {
+        let request = PeerRequestListener {
             id,
             response_type,
-            msg,
-            inner: Some(tx),
+            inner: tx,
         };
-        let r = self.tx.send(request);
+        self.requests.lock().unwrap().insert(id, request);
+
+        let r = self.tx.send(msg).await;
         if let Err(e) = r {
             log::error!(
                 "{}: Tried to submit a request after server was closed: {}",
@@ -97,7 +102,32 @@ impl PeerConnectionInner {
                 e
             );
         }
-        rx
+        match rx.await {
+            Ok(r) => Ok(r),
+            Err(e) => Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Got an error while trying to close connection",
+            )),
+        }
+    }
+
+    pub async fn close(&mut self) -> io::Result<PeerRequestResponse> {
+        log::info!("closing");
+        let header = items::Header {
+            r#type: items::MessageType::Close as i32,
+            compression: items::MessageCompression::r#None as i32,
+        };
+        let message = items::Close {
+            reason: "Exit by user".to_string(),
+        };
+        let mut message_buffer: Vec<u8> = Vec::new();
+        message_buffer.extend_from_slice(&u16::to_be_bytes(header.encoded_len() as u16));
+        message_buffer.append(&mut header.encode_to_vec());
+        message_buffer.extend_from_slice(&u32::to_be_bytes(message.encoded_len() as u32));
+        message_buffer.append(&mut message.encode_to_vec());
+        self.shutdown_send.send(());
+        self.submit_request(-1, PeerRequestResponseType::WhenClosed, message_buffer)
+            .await
     }
 }
 
@@ -149,8 +179,10 @@ async fn handle_response(
         response.id
     );
     if let Some(peer_request) = inner.requests.lock().unwrap().remove(&response.id) {
-        assert!(peer_request.inner.is_some());
-        let r = peer_request.inner.unwrap().send(response);
+        assert!(peer_request.response_type == PeerRequestResponseType::WhenResponse);
+        let r = peer_request
+            .inner
+            .send(PeerRequestResponse::Response(response));
         assert!(r.is_ok());
     }
     Ok(())
@@ -204,44 +236,11 @@ async fn handle_writing(
     mut wr: WriteHalf<impl AsyncWriteExt>,
     inner: PeerConnectionInner,
 ) -> tokio::io::Result<()> {
-    loop {
-        let mut content: Option<Vec<u8>> = None;
-        let mut close = false;
-        {
-            if let Ok(msg) = inner.rx.try_lock().map(|l| l.try_recv()) {
-                if msg.is_err() {
-                    continue;
-                }
-                let msg = msg.unwrap();
-
-                content = Some(msg.msg.clone());
-                if msg.response_type == PeerRequestResponseType::WhenSent {
-                    let r = items::Response {
-                        id: -1,
-                        data: "hello world".to_string().into_bytes(),
-                        code: 0,
-                    };
-                    let m = msg.inner.unwrap().send(r);
-                    assert!(m.is_ok());
-                } else if msg.response_type == PeerRequestResponseType::WhenClosed {
-                    close = true;
-                } else if msg.response_type == PeerRequestResponseType::WhenResponse {
-                    if msg.inner.is_some() {
-                        if let Ok(mut l) = inner.requests.lock() {
-                            l.insert(msg.id, msg);
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(msg) = content {
-            wr.write_all(&msg).await?;
-        }
-        if close {
-            wr.shutdown().await?;
-            return Ok(());
-        }
+    let mut rx = inner.rx.lock().await;
+    while let Some(msg) = rx.recv().await {
+        wr.write_all(&msg).await?;
     }
+    Ok(())
 }
 
 /// Starts two tasks, one that sends data over TCP, and one that receives
@@ -257,22 +256,20 @@ pub async fn handle_connection(
     let (mut rd, wr) = tokio::io::split(stream);
 
     // TODO: More graceful shutdown that abort
-    let (shutdown_send, mut shutdown_recv) = tokio::sync::mpsc::unbounded_channel::<()>();
-
-    let sendclone = shutdown_send.clone();
+    let sendclone = inner.shutdown_send.clone();
     let innerclone = inner.clone();
     let s1 = tokio::spawn(async move {
         handle_reading(&mut rd, innerclone).await;
-        sendclone.send(());
+        //sendclone.send(());
     });
 
-    let sendclone = shutdown_send.clone();
+    let sendclone = inner.shutdown_send.clone();
     let innerclone = inner.clone();
     let s2 = tokio::spawn(async move {
         handle_writing(wr, innerclone).await;
-        sendclone.send(());
+        //sendclone.send(());
     });
-    shutdown_recv.recv().await;
+    inner.shutdown_recv.lock().await.recv().await;
     s1.abort();
     s2.abort();
     log::info!("{}: Shutting down server", inner.name);
@@ -286,12 +283,7 @@ pub async fn handle_connection(
     let mut l = inner.requests.lock().unwrap();
     for k in keys {
         let r = l.remove(&k).unwrap();
-        let response = items::Response {
-            id: r.id,
-            data: "hello world".to_string().into_bytes(),
-            code: 0,
-        };
-        let s = r.inner.unwrap().send(response);
+        let s = r.inner.send(PeerRequestResponse::Closed);
         assert!(s.is_ok());
     }
     Ok(())
