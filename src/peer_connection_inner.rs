@@ -34,6 +34,7 @@ pub struct PeerRequest {
 pub struct PeerConnectionInner {
     name: Arc<String>,
     requests: Arc<Mutex<HashMap<i32, PeerRequest>>>,
+    hello: Arc<Mutex<Option<items::Hello>>>,
     tx: Sender<PeerRequest>,
     rx: Arc<Mutex<Receiver<PeerRequest>>>,
 }
@@ -44,9 +45,18 @@ impl PeerConnectionInner {
         PeerConnectionInner {
             name: Arc::new(name),
             requests: Arc::new(Mutex::new(HashMap::new())),
+            hello: Arc::new(Mutex::new(None)),
             tx,
             rx: Arc::new(Mutex::new(rx)),
         }
+    }
+
+    pub fn get_peer_name(&self) -> Option<String> {
+        self.hello
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|x| x.device_name.clone())
     }
 
     pub fn submit_message(&mut self, msg: Vec<u8>) {
@@ -241,8 +251,9 @@ pub async fn handle_connection(
     mut stream: (impl AsyncWriteExt + AsyncReadExt + Unpin + std::marker::Send + 'static),
     inner: PeerConnectionInner,
 ) -> tokio::io::Result<()> {
-    let hello = items::exchange_hellos(&mut stream).await?;
+    let hello = items::exchange_hellos(&mut stream, inner.name.to_string()).await?;
     log::info!("{}: Received hello from {}", inner.name, hello.client_name);
+    *inner.hello.lock().unwrap() = Some(hello);
     let (mut rd, wr) = tokio::io::split(stream);
 
     // TODO: More graceful shutdown that abort

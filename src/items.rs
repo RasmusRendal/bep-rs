@@ -38,12 +38,12 @@ macro_rules! receive_message {
 // TODO: Stop returning integers constantly, figure out how to have a result return type with
 // void/error
 /// Given a socket, send a BEP hello message
-pub async fn send_hello(socket: &mut (impl AsyncWriteExt + Unpin)) -> io::Result<()> {
+pub async fn send_hello(socket: &mut (impl AsyncWriteExt + Unpin), name: String) -> io::Result<()> {
     let magic = HELLO_MAGIC.to_be_bytes().to_vec();
     socket.write_all(&magic).await?;
 
     let hello = Hello {
-        device_name: "device".to_string(),
+        device_name: name,
         client_name: "beercan".to_string(),
         client_version: "0.1".to_string(),
     };
@@ -76,7 +76,8 @@ pub async fn receive_hello(socket: &mut (impl AsyncReadExt + Unpin)) -> io::Resu
 
 pub async fn exchange_hellos(
     socket: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
+    name: String,
 ) -> io::Result<Hello> {
-    send_hello(socket).await?;
+    send_hello(socket, name).await?;
     receive_hello(socket).await
 }

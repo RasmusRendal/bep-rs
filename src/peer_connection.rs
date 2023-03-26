@@ -149,6 +149,10 @@ impl PeerConnection {
         */
         Ok(())
     }
+
+    pub fn get_peer_name(&self) -> Option<String> {
+        return self.inner.get_peer_name();
+    }
 }
 
 #[cfg(test)]
@@ -164,6 +168,8 @@ mod tests {
         let mut connection2 = PeerConnection::new(server, "con2");
         assert!(connection1.close().await.is_ok());
         assert!(connection2.close().await.is_ok());
+        assert!(connection1.get_peer_name().unwrap() == "con2".to_string());
+        assert!(connection2.get_peer_name().unwrap() == "con1".to_string());
         Ok(())
     }
 }
