@@ -3,7 +3,6 @@ use super::bep_state;
 mod items;
 mod peer_connection_inner;
 use super::bep_state::BepState;
-use futures::channel::oneshot;
 use log;
 use peer_connection_inner::{
     handle_connection, PeerConnectionInner, PeerRequestResponse, PeerRequestResponseType,
@@ -38,9 +37,8 @@ impl PeerConnection {
     pub fn new(
         socket: (impl AsyncWrite + AsyncRead + Unpin + Send + 'static),
         state: Arc<Mutex<BepState>>,
-        name: &'static str,
     ) -> Self {
-        let inner = PeerConnectionInner::new(name.to_string(), state);
+        let inner = PeerConnectionInner::new(state);
         let me = PeerConnection {
             inner: inner.clone(),
         };
@@ -134,7 +132,7 @@ impl PeerConnection {
             PeerRequestResponse::Error(e) => {
                 log::error!(
                     "{}: Got error while trying to close request: {}",
-                    self.inner.name,
+                    self.inner.get_name(),
                     e
                 );
                 return Err(io::Error::new(
@@ -169,11 +167,13 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
         let tempdir1 = tempfile::tempdir().unwrap().into_path();
         let state1 = Arc::new(Mutex::new(BepState::new(tempdir1)));
+        state1.lock().unwrap().set_name("con1".to_string());
         let tempdir2 = tempfile::tempdir().unwrap().into_path();
         let state2 = Arc::new(Mutex::new(BepState::new(tempdir2)));
+        state2.lock().unwrap().set_name("con2".to_string());
         let (client, server) = tokio::io::duplex(64);
-        let mut connection1 = PeerConnection::new(client, state1, "con1");
-        let mut connection2 = PeerConnection::new(server, state2, "con2");
+        let mut connection1 = PeerConnection::new(client, state1);
+        let mut connection2 = PeerConnection::new(server, state2);
         connection1.close().await.unwrap();
         connection2.close().await.unwrap();
         assert!(connection1.get_peer_name().unwrap() == "con2".to_string());
@@ -190,8 +190,8 @@ mod tests {
         let tempdir2 = tempfile::tempdir().unwrap().into_path();
         let state2 = Arc::new(Mutex::new(BepState::new(tempdir2)));
 
-        let mut connection1 = PeerConnection::new(client, state1, "synccon1");
-        let mut connection2 = PeerConnection::new(server, state2, "synccon2");
+        let mut connection1 = PeerConnection::new(client, state1);
+        let mut connection2 = PeerConnection::new(server, state2);
         let hash: Vec<u8> = b"\xb9\x4d\x27\xb9\x93\x4d\x3e\x08\xa5\x2e\x52\xd7\xda\x7d\xab\xfa\xc4\x84\xef\xe3\x7a\x53\x80\xee\x90\x88\xf7\xac\xe2\xef\xcd\xe9".to_vec();
         let block = bep_state::Block {
             offset: 0,

@@ -1,3 +1,8 @@
+CREATE TABLE device_options (
+    id INTEGER PRIMARY KEY,
+    device_name TEXT NOT NULL
+);
+
 CREATE TABLE sync_folders (
   id TEXT PRIMARY KEY,
   label TEXT NOT NULL,

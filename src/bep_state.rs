@@ -88,6 +88,38 @@ impl BepState {
             .collect::<Vec<_>>()
     }
 
+    fn get_options(&mut self) -> Option<DeviceOption> {
+        use super::schema::device_options::dsl::*;
+        device_options
+            .load::<DeviceOption>(&mut self.connection)
+            .unwrap_or_default()
+            .pop()
+    }
+
+    pub fn get_name(&mut self) -> String {
+        //TODO: Generate a random device name
+        self.get_options()
+            .map(|x| x.device_name)
+            .unwrap_or("Device".to_string())
+    }
+
+    pub fn set_name(&mut self, name: String) {
+        use crate::schema::device_options;
+        if let Some(mut options) = self.get_options() {
+            options.device_name = name;
+            //diesel::update(options);
+        } else {
+            let new_options = DeviceOption {
+                id: Some(1),
+                device_name: name,
+            };
+            diesel::insert_into(device_options::table)
+                .values(&new_options)
+                .execute(&mut self.connection)
+                .expect("Error adding directory");
+        }
+    }
+
     /// Get list of peers to the client
     pub fn get_peers(&mut self) -> Vec<Peer> {
         use super::schema::peers::dsl::*;

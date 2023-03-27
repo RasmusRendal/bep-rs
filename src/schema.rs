@@ -1,6 +1,13 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    device_options (id) {
+        id -> Nullable<Integer>,
+        device_name -> Text,
+    }
+}
+
+diesel::table! {
     folder_shares (id) {
         id -> Nullable<Integer>,
         sync_folder_id -> Text,
@@ -35,4 +42,10 @@ diesel::joinable!(folder_shares -> peers (peer_id));
 diesel::joinable!(folder_shares -> sync_folders (sync_folder_id));
 diesel::joinable!(peer_addresses -> peers (peer_id));
 
-diesel::allow_tables_to_appear_in_same_query!(folder_shares, peer_addresses, peers, sync_folders,);
+diesel::allow_tables_to_appear_in_same_query!(
+    device_options,
+    folder_shares,
+    peer_addresses,
+    peers,
+    sync_folders,
+);

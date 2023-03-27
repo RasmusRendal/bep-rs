@@ -2,6 +2,12 @@ use super::schema::*;
 use diesel::prelude::*;
 
 #[derive(Queryable, Insertable)]
+pub struct DeviceOption {
+    pub id: Option<i32>,
+    pub device_name: String,
+}
+
+#[derive(Queryable, Insertable)]
 pub struct SyncFolder {
     pub id: Option<String>,
     pub label: String,

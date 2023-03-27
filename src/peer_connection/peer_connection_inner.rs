@@ -9,9 +9,7 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::sync::mpsc::{
-    channel, unbounded_channel, Receiver, Sender, UnboundedReceiver, UnboundedSender,
-};
+use tokio::sync::mpsc::{channel, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 #[derive(Clone, PartialEq)]
 pub enum PeerRequestResponseType {
@@ -36,7 +34,6 @@ pub struct PeerRequestListener {
 /// Encapsulates the "inner" state of the PeerConnection
 #[derive(Clone)]
 pub struct PeerConnectionInner {
-    pub name: Arc<String>,
     state: Arc<Mutex<BepState>>,
     requests: Arc<Mutex<HashMap<i32, PeerRequestListener>>>,
     hello: Arc<Mutex<Option<items::Hello>>>,
@@ -49,11 +46,10 @@ pub struct PeerConnectionInner {
 }
 
 impl PeerConnectionInner {
-    pub fn new(name: String, state: Arc<Mutex<BepState>>) -> Self {
+    pub fn new(state: Arc<Mutex<BepState>>) -> Self {
         let (tx, rx) = channel(100);
         let (shutdown_send, shutdown_recv) = tokio::sync::mpsc::unbounded_channel::<()>();
         PeerConnectionInner {
-            name: Arc::new(name),
             state,
             requests: Arc::new(Mutex::new(HashMap::new())),
             hello: Arc::new(Mutex::new(None)),
@@ -62,6 +58,10 @@ impl PeerConnectionInner {
             shutdown_send,
             shutdown_recv: Arc::new(tokio::sync::Mutex::new(shutdown_recv)),
         }
+    }
+
+    pub fn get_name(&self) -> String {
+        self.state.lock().unwrap().get_name()
     }
 
     pub fn get_peer_name(&self) -> Option<String> {
@@ -77,7 +77,7 @@ impl PeerConnectionInner {
         if let Err(e) = r {
             log::error!(
                 "{}: Tried to submit a request after server was closed: {}",
-                self.name,
+                self.get_name(),
                 e
             );
         }
@@ -102,7 +102,7 @@ impl PeerConnectionInner {
         if let Err(e) = r {
             log::error!(
                 "{}: Tried to submit a request after server was closed: {}",
-                self.name,
+                self.get_name(),
                 e
             );
         }
@@ -142,7 +142,7 @@ pub async fn handle_request(
     mut inner: PeerConnectionInner,
 ) -> tokio::io::Result<()> {
     let request = receive_message!(items::Request, stream)?;
-    log::info!("{}: Received request {:?}", inner.name, request);
+    log::info!("{}: Received request {:?}", inner.get_name(), request);
     let data = "hello world".to_string().into_bytes();
     let hash = digest::digest(&digest::SHA256, &data);
     let response = if hash.as_ref() != request.hash {
@@ -164,7 +164,7 @@ pub async fn handle_request(
             code: items::ErrorCode::NoSuchFile as i32,
         }
     };
-    log::info!("{}: Sending response {:?}", inner.name, response);
+    log::info!("{}: Sending response {:?}", inner.get_name(), response);
     let header = items::Header {
         r#type: 4,
         compression: 0,
@@ -176,7 +176,7 @@ pub async fn handle_request(
     message_buffer.append(&mut response.encode_to_vec());
     inner.submit_message(message_buffer).await;
 
-    log::info!("{}: Finished handling request", inner.name);
+    log::info!("{}: Finished handling request", inner.get_name());
     Ok(())
 }
 
@@ -187,7 +187,7 @@ async fn handle_response(
     let response = receive_message!(items::Response, stream)?;
     log::info!(
         "{}: Received response for request {}",
-        inner.name,
+        inner.get_name(),
         response.id
     );
     if let Some(peer_request) = inner.requests.lock().unwrap().remove(&response.id) {
@@ -223,7 +223,7 @@ async fn handle_reading(
             ));
         }
         if header.r#type == items::MessageType::Request as i32 {
-            log::info!("{}: Handling request", inner.name);
+            log::info!("{}: Handling request", inner.get_name());
             let innerclone = inner.clone();
             handle_request(stream, innerclone).await?;
         } else if header.r#type == items::MessageType::Response as i32 {
@@ -233,7 +233,7 @@ async fn handle_reading(
             let close = receive_message!(items::Close, stream)?;
             log::info!(
                 "{}: Peer requested close. Reason: {}",
-                inner.name,
+                inner.get_name(),
                 close.reason
             );
             return Err(io::Error::new(
@@ -255,7 +255,7 @@ async fn handle_writing(
 ) -> tokio::io::Result<()> {
     let mut rx = inner.rx.lock().await;
     while let Some(msg) = rx.recv().await {
-        log::info!("{}: Wrote message", inner.name);
+        log::info!("{}: Wrote message", inner.get_name());
         wr.write_all(&msg).await?;
     }
     Ok(())
@@ -268,13 +268,17 @@ pub async fn handle_connection(
     mut stream: (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
     inner: PeerConnectionInner,
 ) -> tokio::io::Result<()> {
-    let hello = items::exchange_hellos(&mut stream, inner.name.to_string()).await?;
-    log::info!("{}: Received hello from {}", inner.name, hello.client_name);
+    let hello = items::exchange_hellos(&mut stream, inner.get_name().to_string()).await?;
+    log::info!(
+        "{}: Received hello from {}",
+        inner.get_name(),
+        hello.client_name
+    );
     *inner.hello.lock().unwrap() = Some(hello);
     let (mut rd, wr) = tokio::io::split(stream);
 
     // TODO: More graceful shutdown that abort
-    let name = inner.name.clone();
+    let name = inner.get_name();
     let sendclone = inner.shutdown_send.clone();
     let innerclone = inner.clone();
     let s1 = tokio::spawn(async move {
@@ -288,7 +292,7 @@ pub async fn handle_connection(
 
     let sendclone = inner.shutdown_send.clone();
     let innerclone = inner.clone();
-    let name = inner.name.clone();
+    let name = inner.get_name();
     let s2 = tokio::spawn(async move {
         let r = handle_writing(wr, innerclone).await;
         if let Err(e) = &r {
@@ -301,7 +305,7 @@ pub async fn handle_connection(
     inner.shutdown_recv.lock().await.recv().await;
     s1.abort();
     s2.abort();
-    log::info!("{}: Shutting down server", inner.name);
+    log::info!("{}: Shutting down server", inner.get_name());
 
     let keys: Vec<i32> = inner
         .requests

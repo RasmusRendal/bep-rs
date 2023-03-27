@@ -24,7 +24,7 @@ async fn connect_to_server(
     log::info!(target: "Daemon", "Connecting to {addr}");
 
     let stream = TcpStream::connect(addr).await?;
-    let mut connection = PeerConnection::new(stream, state, "daemon");
+    let mut connection = PeerConnection::new(stream, state);
     loop {
         let dirs = sync_directories.clone();
         for folder in dirs {
