@@ -127,6 +127,7 @@ dependencies = [
  "prost-build",
  "prost-types",
  "rand",
+ "ring",
  "rustls",
  "tempfile",
  "tokio",

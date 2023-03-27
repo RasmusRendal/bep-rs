@@ -2,6 +2,7 @@ use super::items;
 use futures::channel::oneshot;
 use log;
 use prost::Message;
+use ring::digest;
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -139,17 +140,25 @@ pub async fn handle_request(
 ) -> tokio::io::Result<()> {
     let request = receive_message!(items::Request, stream)?;
     log::info!("{}: Received request {:?}", inner.name, request);
-    let response = if request.name == "testfile" {
+    let data = "hello world".to_string().into_bytes();
+    let hash = digest::digest(&digest::SHA256, &data);
+    let response = if hash.as_ref() != request.hash {
         items::Response {
             id: request.id,
-            data: "hello world".to_string().into_bytes(),
-            code: 0,
+            data,
+            code: items::ErrorCode::InvalidFile as i32,
+        }
+    } else if request.name == "testfile" {
+        items::Response {
+            id: request.id,
+            data,
+            code: items::ErrorCode::NoError as i32,
         }
     } else {
         items::Response {
             id: request.id,
             data: vec![],
-            code: 2,
+            code: items::ErrorCode::NoSuchFile as i32,
         }
     };
     log::info!("{}: Sending response {:?}", inner.name, response);

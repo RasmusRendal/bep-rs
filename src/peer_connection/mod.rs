@@ -11,6 +11,7 @@ use prost::Message;
 use rand::distributions::Standard;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use ring::digest;
 use std::fs::File;
 use std::io::{self, Write};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -78,7 +79,7 @@ impl PeerConnection {
             name: sync_file.name.clone(),
             offset: 0,
             size: 8,
-            hash: vec![0],
+            hash: sync_file.blocks[0].hash.clone(),
             from_temporary: false,
         };
 
@@ -97,6 +98,14 @@ impl PeerConnection {
 
         match message {
             PeerRequestResponse::Response(response) => {
+                let hash = digest::digest(&digest::SHA256, &response.data);
+                if hash.as_ref() != sync_file.blocks[0].hash.clone() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Received file does not correspond to requested hash",
+                    ));
+                }
+
                 let mut file = directory.path.clone();
                 file.push(sync_file.name.clone());
                 log::info!("Writing to path {:?}", file);
@@ -171,10 +180,11 @@ mod tests {
         let (client, server) = tokio::io::duplex(1024);
         let mut connection1 = PeerConnection::new(client, "synccon1");
         let mut connection2 = PeerConnection::new(server, "synccon2");
+        let hash: Vec<u8> = b"\xb9\x4d\x27\xb9\x93\x4d\x3e\x08\xa5\x2e\x52\xd7\xda\x7d\xab\xfa\xc4\x84\xef\xe3\x7a\x53\x80\xee\x90\x88\xf7\xac\xe2\xef\xcd\xe9".to_vec();
         let block = bep_state::Block {
             offset: 0,
             size: 8,
-            hash: vec![],
+            hash,
         };
         let file = bep_state::File {
             name: "testfile".to_string(),

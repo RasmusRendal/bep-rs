@@ -18,6 +18,7 @@ env_logger = "0.10.0"
 futures = "0.3.27"
 console-subscriber = "0.1.8"
 tempfile = "3.4.0"
+ring = "0.16.20"
 
 [build-dependencies]
 prost-build = "0.11"
