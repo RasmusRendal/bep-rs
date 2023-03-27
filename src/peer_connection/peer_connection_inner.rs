@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::mpsc::{
     channel, unbounded_channel, Receiver, Sender, UnboundedReceiver, UnboundedSender,
 };
@@ -134,7 +134,7 @@ impl PeerConnectionInner {
 /// Call this function when the client has indicated it want to send a Request
 /// At the moment, it always responds with a hardcoded file
 pub async fn handle_request(
-    stream: &mut ReadHalf<impl AsyncReadExt>,
+    stream: &mut ReadHalf<impl AsyncRead>,
     mut inner: PeerConnectionInner,
 ) -> tokio::io::Result<()> {
     let request = receive_message!(items::Request, stream)?;
@@ -162,14 +162,14 @@ pub async fn handle_request(
     message_buffer.append(&mut header.encode_to_vec());
     message_buffer.extend_from_slice(&u32::to_be_bytes(response.encoded_len() as u32));
     message_buffer.append(&mut response.encode_to_vec());
-    inner.submit_message(message_buffer);
+    inner.submit_message(message_buffer).await;
 
     log::info!("{}: Finished handling request", inner.name);
     Ok(())
 }
 
 async fn handle_response(
-    stream: &mut ReadHalf<impl AsyncReadExt>,
+    stream: &mut ReadHalf<impl AsyncRead>,
     inner: PeerConnectionInner,
 ) -> tokio::io::Result<()> {
     let response = receive_message!(items::Response, stream)?;
@@ -184,13 +184,18 @@ async fn handle_response(
             .inner
             .send(PeerRequestResponse::Response(response));
         assert!(r.is_ok());
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Received unsolicited response",
+        ))
     }
-    Ok(())
 }
 
 /// The main function of the server. Decode a message, and handle it accordingly
 async fn handle_reading(
-    stream: &mut ReadHalf<impl AsyncReadExt>,
+    stream: &mut ReadHalf<impl AsyncRead>,
     inner: PeerConnectionInner,
 ) -> tokio::io::Result<()> {
     loop {
@@ -238,6 +243,7 @@ async fn handle_writing(
 ) -> tokio::io::Result<()> {
     let mut rx = inner.rx.lock().await;
     while let Some(msg) = rx.recv().await {
+        log::info!("{}: Wrote message", inner.name);
         wr.write_all(&msg).await?;
     }
     Ok(())
@@ -247,7 +253,7 @@ async fn handle_writing(
 /// If as a result of receiving a message, the server wants to transmit something,
 /// it simply adds is to the tx queue
 pub async fn handle_connection(
-    mut stream: (impl AsyncWriteExt + AsyncReadExt + Unpin + std::marker::Send + 'static),
+    mut stream: (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
     inner: PeerConnectionInner,
 ) -> tokio::io::Result<()> {
     let hello = items::exchange_hellos(&mut stream, inner.name.to_string()).await?;
@@ -256,18 +262,29 @@ pub async fn handle_connection(
     let (mut rd, wr) = tokio::io::split(stream);
 
     // TODO: More graceful shutdown that abort
+    let name = inner.name.clone();
     let sendclone = inner.shutdown_send.clone();
     let innerclone = inner.clone();
     let s1 = tokio::spawn(async move {
-        handle_reading(&mut rd, innerclone).await;
-        //sendclone.send(());
+        let r = handle_reading(&mut rd, innerclone).await;
+        if let Err(e) = &r {
+            log::error!("{}: Got error from reader: {}", name, e);
+        }
+        sendclone.send(());
+        r
     });
 
     let sendclone = inner.shutdown_send.clone();
     let innerclone = inner.clone();
+    let name = inner.name.clone();
     let s2 = tokio::spawn(async move {
-        handle_writing(wr, innerclone).await;
-        //sendclone.send(());
+        let r = handle_writing(wr, innerclone).await;
+        if let Err(e) = &r {
+            log::error!("{}: Got error from writer: {}", name, e);
+        }
+
+        sendclone.send(());
+        r
     });
     inner.shutdown_recv.lock().await.recv().await;
     s1.abort();

@@ -13,11 +13,11 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::fs::File;
 use std::io::{self, Write};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 // TODO: When this rust PR lands
 // https://github.com/rust-lang/rust/issues/63063
-//type Stream = (impl AsyncWriteExt+AsyncReadExt+Unpin+Send+'static);
+//type Stream = (impl AsyncWrite+AsyncRead+Unpin+Send+'static);
 
 /// When a connection is established to a peer, this class
 /// should take over the socket. It creates its own thread
@@ -33,7 +33,7 @@ pub struct PeerConnection {
 
 impl PeerConnection {
     pub fn new(
-        socket: (impl AsyncWriteExt + AsyncReadExt + Unpin + Send + 'static),
+        socket: (impl AsyncWrite + AsyncRead + Unpin + Send + 'static),
         name: &'static str,
     ) -> Self {
         let inner = PeerConnectionInner::new(name.to_string());
@@ -148,6 +148,8 @@ impl PeerConnection {
 mod tests {
     // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
+    use std::io::prelude::*;
+    use std::io::BufReader;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_open_close() -> io::Result<()> {
@@ -160,6 +162,41 @@ mod tests {
         connection2.close().await.unwrap();
         assert!(connection1.get_peer_name().unwrap() == "con2".to_string());
         assert!(connection2.get_peer_name().unwrap() == "con1".to_string());
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_get_file() -> io::Result<()> {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let (client, server) = tokio::io::duplex(1024);
+        let mut connection1 = PeerConnection::new(client, "synccon1");
+        let mut connection2 = PeerConnection::new(server, "synccon2");
+        let block = bep_state::Block {
+            offset: 0,
+            size: 8,
+            hash: vec![],
+        };
+        let file = bep_state::File {
+            name: "testfile".to_string(),
+            hash: vec![],
+            blocks: vec![block],
+        };
+        let mut tempdir = tempfile::tempdir().unwrap().into_path();
+        let dir = bep_state::Directory {
+            id: "garbage".to_string(),
+            label: "directory".to_string(),
+            path: tempdir.clone(),
+            files: vec![],
+        };
+        connection1.get_file(&dir, &file).await?;
+        tempdir.push("testfile");
+        let file = File::open(tempdir).unwrap();
+        let mut buf_reader = BufReader::new(file);
+        let mut contents = String::new();
+        buf_reader.read_to_string(&mut contents)?;
+        assert_eq!(contents, "hello world");
+        connection1.close().await?;
+        connection2.close().await?;
         Ok(())
     }
 }
