@@ -149,7 +149,7 @@ mod tests {
     // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_open_close() -> io::Result<()> {
         console_subscriber::init();
         let _ = env_logger::builder().is_test(true).try_init();
