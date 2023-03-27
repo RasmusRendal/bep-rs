@@ -1,3 +1,4 @@
+use super::bep_state::BepState;
 use super::items;
 use futures::channel::oneshot;
 use log;
@@ -36,6 +37,7 @@ pub struct PeerRequestListener {
 #[derive(Clone)]
 pub struct PeerConnectionInner {
     pub name: Arc<String>,
+    state: Arc<Mutex<BepState>>,
     requests: Arc<Mutex<HashMap<i32, PeerRequestListener>>>,
     hello: Arc<Mutex<Option<items::Hello>>>,
     tx: Sender<Vec<u8>>,
@@ -47,11 +49,12 @@ pub struct PeerConnectionInner {
 }
 
 impl PeerConnectionInner {
-    pub fn new(name: String) -> Self {
+    pub fn new(name: String, state: Arc<Mutex<BepState>>) -> Self {
         let (tx, rx) = channel(100);
         let (shutdown_send, shutdown_recv) = tokio::sync::mpsc::unbounded_channel::<()>();
         PeerConnectionInner {
             name: Arc::new(name),
+            state,
             requests: Arc::new(Mutex::new(HashMap::new())),
             hello: Arc::new(Mutex::new(None)),
             tx,

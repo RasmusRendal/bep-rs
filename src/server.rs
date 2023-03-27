@@ -2,28 +2,29 @@ use super::bep_state::BepState;
 use log;
 use std::error::Error;
 use std::io;
+use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
 use super::peer_connection::PeerConnection;
 
 pub struct Server {
     bind_address: Option<String>,
-    state: BepState,
+    state: Arc<Mutex<BepState>>,
 }
 
 /// Listen for connections at address, printing whatever the client sends us
-async fn run_server(address: String) -> io::Result<()> {
+async fn run_server(address: String, state: Arc<Mutex<BepState>>) -> io::Result<()> {
     let listener = TcpListener::bind(address).await?;
 
     loop {
         let (socket, _) = listener.accept().await?;
 
-        PeerConnection::new(socket, "server");
+        PeerConnection::new(socket, state.clone(), "server");
     }
 }
 
 impl Server {
-    pub fn new(state: BepState) -> Self {
+    pub fn new(state: Arc<Mutex<BepState>>) -> Self {
         Server {
             bind_address: Some("0.0.0.0:21027".to_string()),
             state,
@@ -38,7 +39,8 @@ impl Server {
         let address = self.bind_address.clone().unwrap();
         log::info!("Starting server, listening on {} ...", address);
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async { run_server(address).await })?;
+        let state = self.state.clone();
+        rt.block_on(async { run_server(address, state).await })?;
         Ok(0)
     }
 }

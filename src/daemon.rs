@@ -15,12 +15,16 @@ pub struct Daemon {
 }
 
 /// Try and connect to the server at addr
-async fn connect_to_server(sync_directories: Vec<Directory>, addr: String) -> io::Result<()> {
+async fn connect_to_server(
+    sync_directories: Vec<Directory>,
+    state: Arc<Mutex<BepState>>,
+    addr: String,
+) -> io::Result<()> {
     log::info!(target: "Daemon", "");
     log::info!(target: "Daemon", "Connecting to {addr}");
 
     let stream = TcpStream::connect(addr).await?;
-    let mut connection = PeerConnection::new(stream, "daemon");
+    let mut connection = PeerConnection::new(stream, state, "daemon");
     loop {
         let dirs = sync_directories.clone();
         for folder in dirs {
@@ -63,7 +67,8 @@ impl Daemon {
                     for addr in addrs {
                         let c = sync_directories.clone();
                         let rt = tokio::runtime::Runtime::new().unwrap();
-                        rt.block_on(async { connect_to_server(c, addr).await })?;
+                        let state = self.state.clone();
+                        rt.block_on(async { connect_to_server(c, state, addr).await })?;
                     }
                 }
             }
