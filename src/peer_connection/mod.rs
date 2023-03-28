@@ -165,11 +165,11 @@ mod tests {
     async fn test_open_close() -> io::Result<()> {
         console_subscriber::init();
         let _ = env_logger::builder().is_test(true).try_init();
-        let tempdir1 = tempfile::tempdir().unwrap().into_path();
-        let state1 = Arc::new(Mutex::new(BepState::new(tempdir1)));
+        let statedir1 = tempfile::tempdir().unwrap().into_path();
+        let state1 = Arc::new(Mutex::new(BepState::new(statedir1)));
         state1.lock().unwrap().set_name("con1".to_string());
-        let tempdir2 = tempfile::tempdir().unwrap().into_path();
-        let state2 = Arc::new(Mutex::new(BepState::new(tempdir2)));
+        let statedir2 = tempfile::tempdir().unwrap().into_path();
+        let state2 = Arc::new(Mutex::new(BepState::new(statedir2)));
         state2.lock().unwrap().set_name("con2".to_string());
         let (client, server) = tokio::io::duplex(64);
         let mut connection1 = PeerConnection::new(client, state1);
@@ -184,15 +184,40 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_get_file() -> io::Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
-        let (client, server) = tokio::io::duplex(1024);
-        let tempdir1 = tempfile::tempdir().unwrap().into_path();
-        let state1 = Arc::new(Mutex::new(BepState::new(tempdir1)));
-        let tempdir2 = tempfile::tempdir().unwrap().into_path();
-        let state2 = Arc::new(Mutex::new(BepState::new(tempdir2)));
 
+        // Constants
+        let file_contents = "hello world";
+        let filename = "testfile";
+        let hash: Vec<u8> = b"\xb9\x4d\x27\xb9\x93\x4d\x3e\x08\xa5\x2e\x52\xd7\xda\x7d\xab\xfa\xc4\x84\xef\xe3\x7a\x53\x80\xee\x90\x88\xf7\xac\xe2\xef\xcd\xe9".to_vec();
+
+        let statedir1 = tempfile::tempdir().unwrap().into_path();
+        let statedir2 = tempfile::tempdir().unwrap().into_path();
+        let state1 = Arc::new(Mutex::new(BepState::new(statedir1)));
+        let state2 = Arc::new(Mutex::new(BepState::new(statedir2)));
+
+        let srcpath = tempfile::tempdir().unwrap().into_path();
+        let dstpath = tempfile::tempdir().unwrap().into_path();
+
+        {
+            let mut helloworld = srcpath.clone();
+            helloworld.push(filename);
+            let mut o = File::create(helloworld)?;
+            o.write_all(file_contents.as_bytes())?;
+        }
+
+        let srcdir = state2
+            .lock()
+            .unwrap()
+            .add_sync_directory(srcpath.clone(), None);
+        let dstdir = state1
+            .lock()
+            .unwrap()
+            .add_sync_directory(dstpath.clone(), Some(srcdir.id));
+
+        let (client, server) = tokio::io::duplex(1024);
         let mut connection1 = PeerConnection::new(client, state1);
         let mut connection2 = PeerConnection::new(server, state2);
-        let hash: Vec<u8> = b"\xb9\x4d\x27\xb9\x93\x4d\x3e\x08\xa5\x2e\x52\xd7\xda\x7d\xab\xfa\xc4\x84\xef\xe3\x7a\x53\x80\xee\x90\x88\xf7\xac\xe2\xef\xcd\xe9".to_vec();
+
         let block = bep_state::Block {
             offset: 0,
             size: 8,
@@ -203,20 +228,15 @@ mod tests {
             hash: vec![],
             blocks: vec![block],
         };
-        let mut tempdir = tempfile::tempdir().unwrap().into_path();
-        let dir = bep_state::Directory {
-            id: "garbage".to_string(),
-            label: "directory".to_string(),
-            path: tempdir.clone(),
-            files: vec![],
-        };
-        connection1.get_file(&dir, &file).await?;
-        tempdir.push("testfile");
-        let file = File::open(tempdir).unwrap();
+
+        connection1.get_file(&dstdir, &file).await?;
+        let mut dstfile = dstpath.clone();
+        dstfile.push(filename);
+        let file = File::open(dstfile).unwrap();
         let mut buf_reader = BufReader::new(file);
         let mut contents = String::new();
         buf_reader.read_to_string(&mut contents)?;
-        assert_eq!(contents, "hello world");
+        assert_eq!(contents, file_contents);
         connection1.close().await?;
         connection2.close().await?;
         Ok(())

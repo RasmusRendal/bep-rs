@@ -5,7 +5,10 @@ use log;
 use prost::Message;
 use ring::digest;
 use std::collections::HashMap;
+use std::fs::File;
 use std::io;
+use std::io::BufReader;
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -143,7 +146,43 @@ pub async fn handle_request(
 ) -> tokio::io::Result<()> {
     let request = receive_message!(items::Request, stream)?;
     log::info!("{}: Received request {:?}", inner.get_name(), request);
-    let data = "hello world".to_string().into_bytes();
+    // TODO: Check if we are syncing with this particular user
+    // Currently any user can request any synced directory, and
+    // this is bad
+
+    let dir = inner
+        .state
+        .lock()
+        .unwrap()
+        .get_sync_directory(request.folder);
+
+    if dir.is_none() {
+        let response = items::Response {
+            id: request.id,
+            data: vec![],
+            code: items::ErrorCode::InvalidFile as i32,
+        };
+        let header = items::Header {
+            r#type: 4,
+            compression: 0,
+        };
+        let mut message_buffer: Vec<u8> = Vec::new();
+        message_buffer.extend_from_slice(&u16::to_be_bytes(header.encoded_len() as u16));
+        message_buffer.append(&mut header.encode_to_vec());
+        message_buffer.extend_from_slice(&u32::to_be_bytes(response.encoded_len() as u32));
+        message_buffer.append(&mut response.encode_to_vec());
+        inner.submit_message(message_buffer).await;
+        return Ok(());
+    }
+
+    let dir = dir.unwrap();
+    let mut path = dir.path.clone();
+    path.push(request.name.clone());
+    let file = File::open(path).unwrap();
+    let mut buf_reader = BufReader::new(file);
+    let mut data = Vec::new();
+    buf_reader.read_to_end(&mut data)?;
+
     let hash = digest::digest(&digest::SHA256, &data);
     let response = if hash.as_ref() != request.hash {
         items::Response {
@@ -151,17 +190,11 @@ pub async fn handle_request(
             data,
             code: items::ErrorCode::InvalidFile as i32,
         }
-    } else if request.name == "testfile" {
+    } else {
         items::Response {
             id: request.id,
             data,
             code: items::ErrorCode::NoError as i32,
-        }
-    } else {
-        items::Response {
-            id: request.id,
-            data: vec![],
-            code: items::ErrorCode::NoSuchFile as i32,
         }
     };
     log::info!("{}: Sending response {:?}", inner.get_name(), response);

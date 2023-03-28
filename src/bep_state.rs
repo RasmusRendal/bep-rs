@@ -80,12 +80,23 @@ impl BepState {
             .unwrap_or_default()
             .iter()
             .map(|x| Directory {
-                id: "hello".to_string(),
-                label: "hello".to_string(),
+                id: x.id.clone().unwrap(),
+                label: x.label.clone(),
                 path: PathBuf::from(x.dir_path.clone()),
                 files: vec![],
             })
             .collect::<Vec<_>>()
+    }
+
+    /// Get a specific sync directory
+    pub fn get_sync_directory(&mut self, id: String) -> Option<Directory> {
+        // TODO: Handle this better
+        for dir in self.get_sync_directories() {
+            if dir.id == id {
+                return Some(dir);
+            }
+        }
+        None
     }
 
     fn get_options(&mut self) -> Option<DeviceOption> {
@@ -146,7 +157,7 @@ impl BepState {
     }
 
     /// Start syncing some directory
-    pub fn add_sync_directory(&mut self, path: PathBuf) {
+    pub fn add_sync_directory(&mut self, path: PathBuf, id: Option<String>) -> Directory {
         use crate::schema::sync_folders;
         use rand::distributions::{Alphanumeric, DistString};
 
@@ -154,10 +165,10 @@ impl BepState {
             panic!("Folder {} not found", path.display());
         }
 
-        let folder_id: String = Alphanumeric.sample_string(&mut rand::thread_rng(), 12);
+        let folder_id = id.unwrap_or(Alphanumeric.sample_string(&mut rand::thread_rng(), 12));
 
         let new_dir = SyncFolder {
-            id: Some(folder_id),
+            id: Some(folder_id.clone()),
             label: path.file_name().unwrap().to_owned().into_string().unwrap(),
             dir_path: path.display().to_string(),
         };
@@ -166,5 +177,6 @@ impl BepState {
             .values(&new_dir)
             .execute(&mut self.connection)
             .expect("Error adding directory");
+        self.get_sync_directory(folder_id).unwrap()
     }
 }
