@@ -132,7 +132,7 @@ impl PeerConnection {
     }
 
     pub async fn close(&mut self) -> tokio::io::Result<()> {
-        log::info!("Connection close requested");
+        log::info!("{}: Connection close requested", self.inner.get_name());
         let response = self.inner.close().await?;
 
         match response {
@@ -185,6 +185,27 @@ mod tests {
         connection2.close().await.unwrap();
         assert!(connection1.get_peer_name().unwrap() == "con2".to_string());
         assert!(connection2.get_peer_name().unwrap() == "con1".to_string());
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_double_close_err() -> io::Result<()> {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let statedir1 = tempfile::tempdir().unwrap().into_path();
+        let state1 = Arc::new(Mutex::new(BepState::new(statedir1)));
+        state1.lock().unwrap().set_name("con1".to_string());
+        let statedir2 = tempfile::tempdir().unwrap().into_path();
+        let state2 = Arc::new(Mutex::new(BepState::new(statedir2)));
+        state2.lock().unwrap().set_name("con2".to_string());
+        let (client, server) = tokio::io::duplex(64);
+        let mut connection1 = PeerConnection::new(client, state1);
+        let mut connection2 = PeerConnection::new(server, state2);
+        connection1.close().await.unwrap();
+        log::info!("test_double_close_err: Close 1 completed");
+        connection2.close().await.unwrap();
+        log::info!("test_double_close_err: Close 2 completed");
+        connection1.close().await.unwrap();
+        log::info!("test_double_close_err: Close 3 completed");
         Ok(())
     }
 
