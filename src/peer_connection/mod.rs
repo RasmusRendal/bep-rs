@@ -65,7 +65,7 @@ impl PeerConnection {
         directory: &SyncDirectory,
         sync_file: &SyncFile,
     ) -> tokio::io::Result<()> {
-        log::info!("Requesting file {}", sync_file.name);
+        //log::info!("Requesting file {}", sync_file.path.file_name().unwrap());
 
         let header = items::Header {
             r#type: items::MessageType::Request as i32,
@@ -73,11 +73,13 @@ impl PeerConnection {
         };
         let message_id = StdRng::from_entropy().sample(Standard);
 
+        let name = sync_file.get_name(directory);
+
         // TODO: Support bigger files
         let message = items::Request {
             id: message_id,
             folder: directory.id.clone(),
-            name: sync_file.name.clone(),
+            name,
             offset: 0,
             size: 8,
             hash: sync_file.hash.clone(),
@@ -114,7 +116,7 @@ impl PeerConnection {
                 }
 
                 let mut file = directory.path.clone();
-                file.push(sync_file.name.clone());
+                file.push(sync_file.get_name(directory));
                 log::info!("Writing to path {:?}", file);
                 let mut o = File::create(file)?;
                 o.write_all(response.data.as_slice())?;
@@ -232,14 +234,14 @@ mod tests {
         let mut connection1 = PeerConnection::new(client, state1);
         let mut connection2 = PeerConnection::new(server, state2);
 
+        let mut dstfile = dstpath.clone();
+        dstfile.push("testfile");
         let file = SyncFile {
-            name: "testfile".to_string(),
+            path: dstfile.clone(),
             hash,
         };
 
         connection1.get_file(&dstdir, &file).await?;
-        let mut dstfile = dstpath.clone();
-        dstfile.push(filename);
         let file = File::open(dstfile).unwrap();
         let mut buf_reader = BufReader::new(file);
         let mut contents = String::new();
@@ -292,8 +294,10 @@ mod tests {
         let mut connection1 = PeerConnection::new(client, state1);
         let mut connection2 = PeerConnection::new(server, state2);
 
+        let mut filepath = dstpath.clone();
+        filepath.push("testfile");
         let file = SyncFile {
-            name: "testfile".to_string(),
+            path: filepath,
             hash,
         };
 

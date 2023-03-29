@@ -1,6 +1,5 @@
 use super::bep_state::BepState;
 use super::models::Peer;
-use super::sync_directory::{SyncDirectory, SyncFile};
 use log;
 use std::error::Error;
 use std::io;
@@ -16,27 +15,15 @@ pub struct Daemon {
 }
 
 /// Try and connect to the server at addr
-async fn connect_to_server(
-    sync_directories: Vec<SyncDirectory>,
-    state: Arc<Mutex<BepState>>,
-    addr: String,
-) -> io::Result<()> {
+async fn connect_to_server(state: Arc<Mutex<BepState>>, addr: String) -> io::Result<()> {
+    // TODO: Add a wait-for-close
     log::info!(target: "Daemon", "");
     log::info!(target: "Daemon", "Connecting to {addr}");
 
     let stream = TcpStream::connect(addr).await?;
     let mut connection = PeerConnection::new(stream, state);
-    loop {
-        let dirs = sync_directories.clone();
-        for folder in dirs {
-            let file = SyncFile {
-                name: "testfile".to_string(),
-                hash: vec![],
-            };
-            connection.get_file(&folder, &file).await?;
-        }
-        thread::sleep(time::Duration::from_millis(2000));
-    }
+    connection.close().await;
+    Ok(())
 }
 
 impl Daemon {
@@ -51,10 +38,6 @@ impl Daemon {
     /// Currently, the daemon simply tries to connect to every peer,
     /// as defined by the client state, in a loop
     pub fn run(&mut self) -> Result<i32, Box<dyn Error>> {
-        let mut sync_directories = vec![];
-        if let Ok(mut d) = self.state.lock() {
-            sync_directories = d.get_sync_directories();
-        }
         loop {
             let mut peers: Option<Vec<Peer>> = None;
             if let Ok(mut l) = self.state.lock() {
@@ -65,10 +48,9 @@ impl Daemon {
                     let addrs = self.state.lock().unwrap().get_addresses(peer);
 
                     for addr in addrs {
-                        let c = sync_directories.clone();
                         let rt = tokio::runtime::Runtime::new().unwrap();
                         let state = self.state.clone();
-                        rt.block_on(async { connect_to_server(c, state, addr).await })?;
+                        rt.block_on(async { connect_to_server(state, addr).await })?;
                     }
                 }
             }
