@@ -1,5 +1,6 @@
 use super::bep_state::BepState;
 use super::items;
+use crate::models::Peer;
 use futures::channel::oneshot;
 use log;
 use prost::Message;
@@ -118,6 +119,27 @@ impl PeerConnectionInner {
         }
     }
 
+    /// Get the peer this connection is to
+    pub fn get_peer(&self) -> Option<Peer> {
+        // TODO: Authenticate peers
+        let peers = self.state.lock().unwrap().get_peers();
+        let name = self
+            .hello
+            .as_ref()
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .device_name
+            .clone();
+        for peer in peers {
+            if name == peer.name {
+                return Some(peer);
+            }
+        }
+        None
+    }
+
     pub async fn close(&mut self) -> io::Result<PeerRequestResponse> {
         log::info!("closing");
         let header = items::Header {
@@ -146,9 +168,6 @@ pub async fn handle_request(
 ) -> tokio::io::Result<()> {
     let request = receive_message!(items::Request, stream)?;
     log::info!("{}: Received request {:?}", inner.get_name(), request);
-    // TODO: Check if we are syncing with this particular user
-    // Currently any user can request any synced directory, and
-    // this is bad
 
     let dir = inner
         .state
@@ -156,7 +175,15 @@ pub async fn handle_request(
         .unwrap()
         .get_sync_directory(request.folder);
 
-    if dir.is_none() {
+    let peer = inner.get_peer().unwrap();
+
+    if dir.is_none()
+        || !inner
+            .state
+            .lock()
+            .unwrap()
+            .is_directory_synced(dir.as_ref().unwrap(), &peer)
+    {
         let response = items::Response {
             id: request.id,
             data: vec![],

@@ -99,6 +99,12 @@ impl PeerConnection {
 
         match message {
             PeerRequestResponse::Response(response) => {
+                if response.code != items::ErrorCode::NoError as i32 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "Got an error when requesting data",
+                    ));
+                }
                 let hash = digest::digest(&digest::SHA256, &response.data);
                 if hash.as_ref() != sync_file.blocks[0].hash.clone() {
                     return Err(io::Error::new(
@@ -194,6 +200,10 @@ mod tests {
         let statedir2 = tempfile::tempdir().unwrap().into_path();
         let state1 = Arc::new(Mutex::new(BepState::new(statedir1)));
         let state2 = Arc::new(Mutex::new(BepState::new(statedir2)));
+        state1.lock().unwrap().set_name("wrongname".to_string());
+        state2.lock().unwrap().set_name("wrongname".to_string());
+        state1.lock().unwrap().set_name("con1".to_string());
+        state2.lock().unwrap().set_name("con2".to_string());
 
         let srcpath = tempfile::tempdir().unwrap().into_path();
         let dstpath = tempfile::tempdir().unwrap().into_path();
@@ -212,8 +222,13 @@ mod tests {
         let dstdir = state1
             .lock()
             .unwrap()
-            .add_sync_directory(dstpath.clone(), Some(srcdir.id));
+            .add_sync_directory(dstpath.clone(), Some(srcdir.id.clone()));
 
+        let peer = state2.lock().unwrap().add_peer("con1".to_string());
+        state2
+            .lock()
+            .unwrap()
+            .sync_directory_with_peer(&srcdir, &peer);
         let (client, server) = tokio::io::duplex(1024);
         let mut connection1 = PeerConnection::new(client, state1);
         let mut connection2 = PeerConnection::new(server, state2);
@@ -237,6 +252,66 @@ mod tests {
         let mut contents = String::new();
         buf_reader.read_to_string(&mut contents)?;
         assert_eq!(contents, file_contents);
+        connection1.close().await?;
+        connection2.close().await?;
+        Ok(())
+    }
+
+    // TODO: DRY
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_nonsynced_directory() -> io::Result<()> {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        // Constants
+        let file_contents = "hello world";
+        let filename = "testfile";
+        let hash: Vec<u8> = b"\xb9\x4d\x27\xb9\x93\x4d\x3e\x08\xa5\x2e\x52\xd7\xda\x7d\xab\xfa\xc4\x84\xef\xe3\x7a\x53\x80\xee\x90\x88\xf7\xac\xe2\xef\xcd\xe9".to_vec();
+
+        let statedir1 = tempfile::tempdir().unwrap().into_path();
+        let statedir2 = tempfile::tempdir().unwrap().into_path();
+        let state1 = Arc::new(Mutex::new(BepState::new(statedir1)));
+        let state2 = Arc::new(Mutex::new(BepState::new(statedir2)));
+        state1.lock().unwrap().set_name("con1".to_string());
+        state2.lock().unwrap().set_name("con2".to_string());
+
+        let srcpath = tempfile::tempdir().unwrap().into_path();
+        let dstpath = tempfile::tempdir().unwrap().into_path();
+
+        {
+            let mut helloworld = srcpath.clone();
+            helloworld.push(filename);
+            let mut o = File::create(helloworld)?;
+            o.write_all(file_contents.as_bytes())?;
+        }
+
+        let srcdir = state2
+            .lock()
+            .unwrap()
+            .add_sync_directory(srcpath.clone(), None);
+        let dstdir = state1
+            .lock()
+            .unwrap()
+            .add_sync_directory(dstpath.clone(), Some(srcdir.id.clone()));
+
+        let peer = state2.lock().unwrap().add_peer("con1".to_string());
+        // state2.lock().unwrap().sync_directory_with_peer(&srcdir, &peer);
+        let (client, server) = tokio::io::duplex(1024);
+        let mut connection1 = PeerConnection::new(client, state1);
+        let mut connection2 = PeerConnection::new(server, state2);
+
+        let block = bep_state::Block {
+            offset: 0,
+            size: 8,
+            hash,
+        };
+        let file = bep_state::File {
+            name: "testfile".to_string(),
+            hash: vec![],
+            blocks: vec![block],
+        };
+
+        let e = connection1.get_file(&dstdir, &file).await;
+        assert!(e.is_err());
         connection1.close().await?;
         connection2.close().await?;
         Ok(())

@@ -1,7 +1,7 @@
 use super::schema::*;
 use diesel::prelude::*;
 
-#[derive(Queryable, Insertable)]
+#[derive(Identifiable, Queryable, Insertable)]
 pub struct DeviceOption {
     pub id: Option<i32>,
     pub device_name: String,
@@ -25,7 +25,7 @@ pub struct Peer {
 pub struct FolderShare {
     pub id: Option<i32>,
     pub sync_folder_id: String,
-    pub peer_id: Option<i32>,
+    pub peer_id: i32,
 }
 
 #[derive(Identifiable, Queryable, Insertable, Associations)]

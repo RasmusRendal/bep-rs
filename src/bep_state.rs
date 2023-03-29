@@ -116,9 +116,17 @@ impl BepState {
 
     pub fn set_name(&mut self, name: String) {
         use crate::schema::device_options;
+        use crate::schema::device_options::dsl;
+        //use crate::schema::device_options;
         if let Some(mut options) = self.get_options() {
-            options.device_name = name;
-            //diesel::update(options);
+            options.device_name = name.clone();
+            diesel::insert_into(device_options::table)
+                .values(options)
+                .on_conflict(dsl::id)
+                .do_update()
+                .set(dsl::device_name.eq(name))
+                .execute(&mut self.connection)
+                .unwrap();
         } else {
             let new_options = DeviceOption {
                 id: Some(1),
@@ -178,5 +186,51 @@ impl BepState {
             .execute(&mut self.connection)
             .expect("Error adding directory");
         self.get_sync_directory(folder_id).unwrap()
+    }
+
+    pub fn add_peer(&mut self, peer_name: String) -> Peer {
+        use crate::schema::peers;
+        use crate::schema::peers::dsl::*;
+        let p = Peer {
+            id: None,
+            name: peer_name.clone(),
+        };
+        diesel::insert_into(peers::table)
+            .values(&p)
+            .execute(&mut self.connection)
+            .expect("Error adding peer");
+
+        peers
+            .filter(name.eq(peer_name))
+            .limit(1)
+            .load::<Peer>(&mut self.connection)
+            .unwrap()
+            .pop()
+            .unwrap()
+    }
+
+    /// Allows the peer to request files from a directory
+    pub fn sync_directory_with_peer(&mut self, directory: &Directory, peer: &Peer) {
+        use crate::schema::folder_shares;
+        let new_share = FolderShare {
+            id: None,
+            sync_folder_id: directory.id.clone(),
+            peer_id: peer.id.unwrap(),
+        };
+        diesel::insert_into(folder_shares::table)
+            .values(&new_share)
+            .execute(&mut self.connection)
+            .expect("Error syncing directory");
+    }
+
+    pub fn is_directory_synced(&mut self, directory: &Directory, peer: &Peer) -> bool {
+        use crate::schema::folder_shares::dsl::*;
+
+        folder_shares
+            .filter(sync_folder_id.eq(directory.id.clone()))
+            .filter(peer_id.eq(peer.id.unwrap()))
+            .load::<FolderShare>(&mut self.connection)
+            .map(|x| x.len() > 0)
+            .unwrap_or(false)
     }
 }
