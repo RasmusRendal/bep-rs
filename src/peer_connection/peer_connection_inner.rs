@@ -1,4 +1,4 @@
-use super::items;
+use super::items::{self, EncodableItem};
 use crate::bep_state::BepState;
 use crate::models::Peer;
 use futures::channel::oneshot;
@@ -12,6 +12,7 @@ use std::io::BufReader;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::mpsc::{channel, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
@@ -154,20 +155,12 @@ impl PeerConnectionInner {
             log::info!("already shut");
             return Ok(PeerRequestResponse::Closed);
         }
-        let header = items::Header {
-            r#type: items::MessageType::Close as i32,
-            compression: items::MessageCompression::r#None as i32,
-        };
         let message = items::Close {
             reason: "Exit by user".to_string(),
-        };
-        let mut message_buffer: Vec<u8> = Vec::new();
-        message_buffer.extend_from_slice(&u16::to_be_bytes(header.encoded_len() as u16));
-        message_buffer.append(&mut header.encode_to_vec());
-        message_buffer.extend_from_slice(&u32::to_be_bytes(message.encoded_len() as u32));
-        message_buffer.append(&mut message.encode_to_vec());
+        }
+        .encode_for_bep();
         log::info!("submitted close");
-        self.submit_request(-1, PeerRequestResponseType::WhenSent, message_buffer)
+        self.submit_request(-1, PeerRequestResponseType::WhenSent, message)
             .await?;
         log::info!("done waiting");
         self.shutdown_send.send(());
@@ -204,16 +197,7 @@ pub async fn handle_request(
             data: vec![],
             code: items::ErrorCode::InvalidFile as i32,
         };
-        let header = items::Header {
-            r#type: 4,
-            compression: 0,
-        };
-        let mut message_buffer: Vec<u8> = Vec::new();
-        message_buffer.extend_from_slice(&u16::to_be_bytes(header.encoded_len() as u16));
-        message_buffer.append(&mut header.encode_to_vec());
-        message_buffer.extend_from_slice(&u32::to_be_bytes(response.encoded_len() as u32));
-        message_buffer.append(&mut response.encode_to_vec());
-        inner.submit_message(message_buffer).await;
+        inner.submit_message(response.encode_for_bep()).await;
         return Ok(());
     }
 
@@ -240,16 +224,7 @@ pub async fn handle_request(
         }
     };
     log::info!("{}: Sending response {:?}", inner.get_name(), response);
-    let header = items::Header {
-        r#type: 4,
-        compression: 0,
-    };
-    let mut message_buffer: Vec<u8> = Vec::new();
-    message_buffer.extend_from_slice(&u16::to_be_bytes(header.encoded_len() as u16));
-    message_buffer.append(&mut header.encode_to_vec());
-    message_buffer.extend_from_slice(&u32::to_be_bytes(response.encoded_len() as u32));
-    message_buffer.append(&mut response.encode_to_vec());
-    inner.submit_message(message_buffer).await;
+    inner.submit_message(response.encode_for_bep()).await;
 
     log::info!("{}: Finished handling request", inner.get_name());
     Ok(())

@@ -3,11 +3,11 @@ mod items;
 mod peer_connection_inner;
 use super::bep_state::BepState;
 use super::sync_directory::{SyncDirectory, SyncFile};
+use items::EncodableItem;
 use log;
 use peer_connection_inner::{
     handle_connection, PeerConnectionInner, PeerRequestResponse, PeerRequestResponseType,
 };
-use prost::Message;
 use rand::distributions::Standard;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -59,7 +59,6 @@ impl PeerConnection {
         self.inner.submit_request(id, response_type, msg).await
     }
 
-    /// Requests a file from the peer, writing to the path on the filesystem
     pub async fn get_file(
         &mut self,
         directory: &SyncDirectory,
@@ -67,10 +66,6 @@ impl PeerConnection {
     ) -> tokio::io::Result<()> {
         //log::info!("Requesting file {}", sync_file.path.file_name().unwrap());
 
-        let header = items::Header {
-            r#type: items::MessageType::Request as i32,
-            compression: items::MessageCompression::r#None as i32,
-        };
         let message_id = StdRng::from_entropy().sample(Standard);
 
         let name = sync_file.get_name(directory);
@@ -86,16 +81,11 @@ impl PeerConnection {
             from_temporary: false,
         };
 
-        let mut message_buffer: Vec<u8> = Vec::new();
-        message_buffer.extend_from_slice(&u16::to_be_bytes(header.encoded_len() as u16));
-        message_buffer.append(&mut header.encode_to_vec());
-        message_buffer.extend_from_slice(&u32::to_be_bytes(message.encoded_len() as u32));
-        message_buffer.append(&mut message.encode_to_vec());
         let message = self
             .submit_request(
                 message_id,
                 PeerRequestResponseType::WhenResponse,
-                message_buffer,
+                message.encode_for_bep(),
             )
             .await?;
 

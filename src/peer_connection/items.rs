@@ -6,6 +6,34 @@ include!(concat!(env!("OUT_DIR"), "/beercanlib.items.rs"));
 
 const HELLO_MAGIC: u32 = 0x2EA7D90B_u32;
 
+pub trait EncodableItem {
+    fn encode_for_bep(&self) -> Vec<u8>;
+}
+
+macro_rules! implement {
+    ($msg_type:ident) => {
+        impl EncodableItem for $msg_type {
+            fn encode_for_bep(&self) -> Vec<u8> {
+                let mut message_buffer: Vec<u8> = Vec::new();
+                let header = Header {
+                    r#type: MessageType::$msg_type as i32,
+                    compression: MessageCompression::r#None as i32,
+                };
+
+                message_buffer.extend_from_slice(&u16::to_be_bytes(header.encoded_len() as u16));
+                message_buffer.append(&mut header.encode_to_vec());
+                message_buffer.extend_from_slice(&u32::to_be_bytes(self.encoded_len() as u32));
+                message_buffer.append(&mut self.encode_to_vec());
+                message_buffer
+            }
+        }
+    };
+}
+
+implement!(Close);
+implement!(Request);
+implement!(Response);
+
 /// Write a message defined in items.proto to the given stream
 #[macro_export]
 macro_rules! send_message {
