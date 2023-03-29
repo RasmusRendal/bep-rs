@@ -34,37 +34,6 @@ implement!(Close);
 implement!(Request);
 implement!(Response);
 
-/// Write a message defined in items.proto to the given stream
-#[macro_export]
-macro_rules! send_message {
-    ( $msg:expr, $stream:expr ) => {{
-        let mut msg_len: [u8; 8] = $msg.encoded_len().to_be_bytes();
-        $stream.write_all(&mut msg_len[1..4]).await?;
-        let mut buf: Vec<u8> = Vec::new();
-        buf.reserve_exact($msg.encoded_len());
-        let mut buf = $msg.encode_length_delimited_to_vec();
-        $stream.write_all(&mut buf).await?;
-    }};
-}
-
-/// Given a stream, read a four-byte length, and then
-/// the message
-#[macro_export]
-macro_rules! receive_message {
-    ( $type:ty, $stream:expr ) => {{
-        let mut msg_len: [u8; 4] = [0; 4];
-        $stream.read_exact(&mut msg_len).await?;
-        let msg_len = u32::from_be_bytes(msg_len) as usize;
-        if msg_len == 0 {
-            log::error!("Message is empty");
-        }
-        let mut message_buffer = vec![0u8; msg_len];
-        $stream.read_exact(&mut message_buffer).await?;
-        <$type>::decode(&*message_buffer)
-    }};
-}
-// TODO: Stop returning integers constantly, figure out how to have a result return type with
-// void/error
 /// Given a socket, send a BEP hello message
 pub async fn send_hello(socket: &mut (impl AsyncWriteExt + Unpin), name: String) -> io::Result<()> {
     let magic = HELLO_MAGIC.to_be_bytes().to_vec();
@@ -99,7 +68,14 @@ pub async fn receive_hello(socket: &mut (impl AsyncReadExt + Unpin)) -> io::Resu
         ));
     }
 
-    Ok(receive_message!(Hello, socket)?)
+    let hello_len = socket.read_u32().await? as usize;
+    if hello_len == 0 {
+        log::error!("Message is empty");
+    }
+    let mut message_buffer = vec![0u8; hello_len];
+    socket.read_exact(&mut message_buffer).await?;
+    let hello = Hello::decode(&*message_buffer)?;
+    Ok(hello)
 }
 
 pub async fn exchange_hellos(
