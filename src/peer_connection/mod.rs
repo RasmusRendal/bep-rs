@@ -1,8 +1,8 @@
-use super::bep_state;
 #[macro_use]
 mod items;
 mod peer_connection_inner;
 use super::bep_state::BepState;
+use super::sync_directory::{SyncDirectory, SyncFile};
 use log;
 use peer_connection_inner::{
     handle_connection, PeerConnectionInner, PeerRequestResponse, PeerRequestResponseType,
@@ -62,8 +62,8 @@ impl PeerConnection {
     /// Requests a file from the peer, writing to the path on the filesystem
     pub async fn get_file(
         &mut self,
-        directory: &bep_state::Directory,
-        sync_file: &bep_state::File,
+        directory: &SyncDirectory,
+        sync_file: &SyncFile,
     ) -> tokio::io::Result<()> {
         log::info!("Requesting file {}", sync_file.name);
 
@@ -80,7 +80,7 @@ impl PeerConnection {
             name: sync_file.name.clone(),
             offset: 0,
             size: 8,
-            hash: sync_file.blocks[0].hash.clone(),
+            hash: sync_file.hash.clone(),
             from_temporary: false,
         };
 
@@ -106,7 +106,7 @@ impl PeerConnection {
                     ));
                 }
                 let hash = digest::digest(&digest::SHA256, &response.data);
-                if hash.as_ref() != sync_file.blocks[0].hash.clone() {
+                if hash.as_ref() != sync_file.hash.clone() {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "Received file does not correspond to requested hash",
@@ -162,7 +162,6 @@ impl PeerConnection {
 
 #[cfg(test)]
 mod tests {
-    // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
     use std::io::prelude::*;
     use std::io::BufReader;
@@ -233,15 +232,9 @@ mod tests {
         let mut connection1 = PeerConnection::new(client, state1);
         let mut connection2 = PeerConnection::new(server, state2);
 
-        let block = bep_state::Block {
-            offset: 0,
-            size: 8,
-            hash,
-        };
-        let file = bep_state::File {
+        let file = SyncFile {
             name: "testfile".to_string(),
-            hash: vec![],
-            blocks: vec![block],
+            hash,
         };
 
         connection1.get_file(&dstdir, &file).await?;
@@ -299,15 +292,9 @@ mod tests {
         let mut connection1 = PeerConnection::new(client, state1);
         let mut connection2 = PeerConnection::new(server, state2);
 
-        let block = bep_state::Block {
-            offset: 0,
-            size: 8,
-            hash,
-        };
-        let file = bep_state::File {
+        let file = SyncFile {
             name: "testfile".to_string(),
-            hash: vec![],
-            blocks: vec![block],
+            hash,
         };
 
         let e = connection1.get_file(&dstdir, &file).await;

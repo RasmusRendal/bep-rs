@@ -1,5 +1,6 @@
-use super::bep_state::{self, BepState, Directory};
+use super::bep_state::BepState;
 use super::models::Peer;
+use super::sync_directory::{SyncDirectory, SyncFile};
 use log;
 use std::error::Error;
 use std::io;
@@ -16,7 +17,7 @@ pub struct Daemon {
 
 /// Try and connect to the server at addr
 async fn connect_to_server(
-    sync_directories: Vec<Directory>,
+    sync_directories: Vec<SyncDirectory>,
     state: Arc<Mutex<BepState>>,
     addr: String,
 ) -> io::Result<()> {
@@ -28,10 +29,9 @@ async fn connect_to_server(
     loop {
         let dirs = sync_directories.clone();
         for folder in dirs {
-            let file = bep_state::File {
+            let file = SyncFile {
                 name: "testfile".to_string(),
                 hash: vec![],
-                blocks: vec![],
             };
             connection.get_file(&folder, &file).await?;
         }

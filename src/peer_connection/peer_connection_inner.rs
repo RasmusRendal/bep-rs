@@ -1,5 +1,5 @@
-use super::bep_state::BepState;
 use super::items;
+use crate::bep_state::BepState;
 use crate::models::Peer;
 use futures::channel::oneshot;
 use log;

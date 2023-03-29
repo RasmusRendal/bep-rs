@@ -1,4 +1,5 @@
 use super::models::*;
+use super::sync_directory::*;
 use diesel::prelude::*;
 use std::fs;
 use std::path::PathBuf;
@@ -11,36 +12,6 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations/");
 pub struct BepState {
     pub data_directory: PathBuf,
     connection: SqliteConnection,
-}
-
-/// A block of a file
-#[derive(Clone)]
-pub struct Block {
-    pub offset: u64,
-    pub size: u32,
-    pub hash: Vec<u8>,
-}
-
-/// A file that we should be syncing
-#[derive(Clone)]
-pub struct File {
-    pub name: String,
-    pub hash: Vec<u8>,
-    pub blocks: Vec<Block>,
-    // If I were writing C++, it would be handly to always be able to refer back
-    // to the parent when working with children of some objects. But that does
-    // not agree well with the Rust memory model. So for the moment, I'll just
-    // be passing a copy of the associated Directory with the File when needed
-    //pub directory: Box<&Directory>,
-}
-
-/// A directory that we should be syncing
-#[derive(Clone)]
-pub struct Directory {
-    pub id: String,
-    pub label: String,
-    pub path: PathBuf,
-    pub files: Vec<File>,
 }
 
 impl BepState {
@@ -73,23 +44,22 @@ impl BepState {
     }
 
     /// Get list of directories to be synced
-    pub fn get_sync_directories(&mut self) -> Vec<Directory> {
+    pub fn get_sync_directories(&mut self) -> Vec<SyncDirectory> {
         use super::schema::sync_folders::dsl::*;
         sync_folders
             .load::<SyncFolder>(&mut self.connection)
             .unwrap_or_default()
             .iter()
-            .map(|x| Directory {
+            .map(|x| SyncDirectory {
                 id: x.id.clone().unwrap(),
                 label: x.label.clone(),
                 path: PathBuf::from(x.dir_path.clone()),
-                files: vec![],
             })
             .collect::<Vec<_>>()
     }
 
     /// Get a specific sync directory
-    pub fn get_sync_directory(&mut self, id: String) -> Option<Directory> {
+    pub fn get_sync_directory(&mut self, id: String) -> Option<SyncDirectory> {
         // TODO: Handle this better
         for dir in self.get_sync_directories() {
             if dir.id == id {
@@ -165,7 +135,7 @@ impl BepState {
     }
 
     /// Start syncing some directory
-    pub fn add_sync_directory(&mut self, path: PathBuf, id: Option<String>) -> Directory {
+    pub fn add_sync_directory(&mut self, path: PathBuf, id: Option<String>) -> SyncDirectory {
         use crate::schema::sync_folders;
         use rand::distributions::{Alphanumeric, DistString};
 
@@ -210,7 +180,7 @@ impl BepState {
     }
 
     /// Allows the peer to request files from a directory
-    pub fn sync_directory_with_peer(&mut self, directory: &Directory, peer: &Peer) {
+    pub fn sync_directory_with_peer(&mut self, directory: &SyncDirectory, peer: &Peer) {
         use crate::schema::folder_shares;
         let new_share = FolderShare {
             id: None,
@@ -223,7 +193,7 @@ impl BepState {
             .expect("Error syncing directory");
     }
 
-    pub fn is_directory_synced(&mut self, directory: &Directory, peer: &Peer) -> bool {
+    pub fn is_directory_synced(&mut self, directory: &SyncDirectory, peer: &Peer) -> bool {
         use crate::schema::folder_shares::dsl::*;
 
         folder_shares
