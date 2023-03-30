@@ -59,9 +59,10 @@ impl PeerConnection {
         self.inner.submit_request(id, response_type, msg).await
     }
 
-    /// Sync an entire directory from the peer
+    /// Sync an entire directory from the peer,
+    /// overwriting the local copy
     pub async fn get_directory(&mut self, directory: &SyncDirectory) -> tokio::io::Result<()> {
-        Ok(())
+        self.inner.get_directory(directory).await
     }
 
     pub async fn get_file(
@@ -69,61 +70,7 @@ impl PeerConnection {
         directory: &SyncDirectory,
         sync_file: &SyncFile,
     ) -> tokio::io::Result<()> {
-        //log::info!("Requesting file {}", sync_file.path.file_name().unwrap());
-
-        let message_id = StdRng::from_entropy().sample(Standard);
-
-        let name = sync_file.get_name(directory);
-
-        // TODO: Support bigger files
-        let message = items::Request {
-            id: message_id,
-            folder: directory.id.clone(),
-            name,
-            offset: 0,
-            size: 8,
-            hash: sync_file.hash.clone(),
-            from_temporary: false,
-        };
-
-        let message = self
-            .submit_request(
-                message_id,
-                PeerRequestResponseType::WhenResponse,
-                message.encode_for_bep(),
-            )
-            .await?;
-
-        match message {
-            PeerRequestResponse::Response(response) => {
-                if response.code != items::ErrorCode::NoError as i32 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "Got an error when requesting data",
-                    ));
-                }
-                let hash = digest::digest(&digest::SHA256, &response.data);
-                if hash.as_ref() != sync_file.hash.clone() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Received file does not correspond to requested hash",
-                    ));
-                }
-
-                let mut file = directory.path.clone();
-                file.push(sync_file.get_name(directory));
-                log::info!("Writing to path {:?}", file);
-                let mut o = File::create(file)?;
-                o.write_all(response.data.as_slice())?;
-            }
-            _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Got error on file request, and I don't know how to handle errors.",
-                ));
-            }
-        }
-        Ok(())
+        self.inner.get_file(directory, sync_file).await
     }
 
     pub async fn close(&mut self) -> tokio::io::Result<()> {
@@ -162,6 +109,7 @@ mod tests {
     use super::*;
     use std::io::prelude::*;
     use std::io::BufReader;
+    use std::{thread, time};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_open_close() -> io::Result<()> {
@@ -332,17 +280,15 @@ mod tests {
         Ok(())
     }
 
-    /*
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_get_directory() -> io::Result<()> {
-        /// Instead of requesting testfile, we should request an entire directory, and the testfile
-        /// should be in there
+        // Instead of requesting testfile, we should request an entire directory, and the testfile
+        // should be in there
         let _ = env_logger::builder().is_test(true).try_init();
 
         // Constants
         let file_contents = "hello world";
         let filename = "testfile";
-        let hash: Vec<u8> = b"\xb9\x4d\x27\xb9\x93\x4d\x3e\x08\xa5\x2e\x52\xd7\xda\x7d\xab\xfa\xc4\x84\xef\xe3\x7a\x53\x80\xee\x90\x88\xf7\xac\xe2\xef\xcd\xe9".to_vec();
 
         let statedir1 = tempfile::tempdir().unwrap().into_path();
         let statedir2 = tempfile::tempdir().unwrap().into_path();
@@ -385,11 +331,16 @@ mod tests {
         let mut connection1 = PeerConnection::new(client, state1);
         let mut connection2 = PeerConnection::new(server, state2);
 
-        connection2.get_directory(&dstdir).await?;
+        // Wait for the index to be received
+        // TODO: Introduce a call that lets us wait until the connection is set up
+        thread::sleep(time::Duration::from_millis(200));
+        connection1.get_directory(&dstdir).await?;
 
         let mut dstfile = dstpath.clone();
         dstfile.push("testfile");
-        let file = File::open(dstfile).unwrap();
+        let file = File::open(dstfile);
+        assert!(file.is_ok());
+        let file = file.unwrap();
         let mut buf_reader = BufReader::new(file);
         let mut contents = String::new();
         buf_reader.read_to_string(&mut contents)?;
@@ -398,5 +349,4 @@ mod tests {
         connection2.close().await?;
         Ok(())
     }
-    */
 }

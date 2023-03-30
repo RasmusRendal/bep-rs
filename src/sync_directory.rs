@@ -63,6 +63,12 @@ impl SyncFile {
         vec![block]
     }
 
+    pub fn get_size(&self) -> u64 {
+        self.get_blocks()
+            .iter()
+            .fold(0, |acc, b| acc + (b.size as u64))
+    }
+
     pub fn get_name(&self, directory: &SyncDirectory) -> String {
         self.path
             .components()

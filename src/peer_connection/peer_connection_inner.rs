@@ -1,15 +1,17 @@
 use super::items::{self, EncodableItem};
 use crate::bep_state::BepState;
 use crate::models::Peer;
+use crate::sync_directory::{SyncDirectory, SyncFile};
 use futures::channel::oneshot;
 use log;
 use prost::Message;
+use rand::distributions::Standard;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use ring::digest;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io;
-use std::io::BufReader;
-use std::io::Read;
+use std::io::{self, BufReader, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::SystemTime;
@@ -41,6 +43,7 @@ pub struct PeerRequestListener {
 #[derive(Clone)]
 pub struct PeerConnectionInner {
     state: Arc<Mutex<BepState>>,
+    indexes: Arc<Mutex<HashMap<String, items::Index>>>,
     requests: Arc<Mutex<HashMap<i32, PeerRequestListener>>>,
     hello: Arc<Mutex<Option<items::Hello>>>,
     tx: Sender<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>,
@@ -57,12 +60,150 @@ impl PeerConnectionInner {
         let (shutdown_send, shutdown_recv) = tokio::sync::mpsc::unbounded_channel::<()>();
         PeerConnectionInner {
             state,
+            indexes: Arc::new(Mutex::new(HashMap::new())),
             requests: Arc::new(Mutex::new(HashMap::new())),
             hello: Arc::new(Mutex::new(None)),
             tx,
             rx: Arc::new(tokio::sync::Mutex::new(rx)),
             shutdown_send,
             shutdown_recv: Arc::new(tokio::sync::Mutex::new(shutdown_recv)),
+        }
+    }
+
+    pub async fn send_index(&self) -> io::Result<()> {
+        if let Some(peer) = self.get_peer() {
+            let directories = self.state.lock().unwrap().get_sync_directories();
+            for dir in directories {
+                let index = items::Index {
+                    folder: dir.id.clone(),
+                    files: dir
+                        .generate_index()
+                        .iter()
+                        .map(|x| items::FileInfo {
+                            name: x.get_name(&dir),
+                            r#type: items::FileInfoType::File as i32,
+                            size: x.get_size() as i64,
+                            permissions: 0,
+                            modified_s: x
+                                .path
+                                .metadata()
+                                .unwrap()
+                                .modified()
+                                .unwrap()
+                                .duration_since(SystemTime::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs() as i64,
+                            modified_ns: 0,
+                            modified_by: 0,
+                            deleted: false,
+                            invalid: false,
+                            no_permissions: true,
+                            version: None,
+                            sequence: 1,
+                            block_size: x.get_size() as i32,
+                            blocks: x
+                                .get_blocks()
+                                .iter()
+                                .map(|y| items::BlockInfo {
+                                    offset: 0,
+                                    size: y.size as i32,
+                                    hash: y.hash.clone(),
+                                    weak_hash: 0,
+                                })
+                                .collect(),
+                            symlink_target: "".to_string(),
+                        })
+                        .collect(),
+                };
+                log::info!("{}: Sending index: {:?}", self.get_name(), index);
+                self.submit_message(index.encode_for_bep()).await;
+            }
+            return Ok(());
+        }
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Peer not yet received",
+        ))
+    }
+
+    pub async fn get_file(
+        &self,
+        directory: &SyncDirectory,
+        sync_file: &SyncFile,
+    ) -> tokio::io::Result<()> {
+        let message_id = StdRng::from_entropy().sample(Standard);
+
+        let name = sync_file.get_name(directory);
+
+        // TODO: Support bigger files
+        let message = items::Request {
+            id: message_id,
+            folder: directory.id.clone(),
+            name,
+            offset: 0,
+            size: 8,
+            hash: sync_file.hash.clone(),
+            from_temporary: false,
+        };
+
+        let message = self
+            .submit_request(
+                message_id,
+                PeerRequestResponseType::WhenResponse,
+                message.encode_for_bep(),
+            )
+            .await?;
+
+        match message {
+            PeerRequestResponse::Response(response) => {
+                if response.code != items::ErrorCode::NoError as i32 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "Got an error when requesting data",
+                    ));
+                }
+                let hash = digest::digest(&digest::SHA256, &response.data);
+                if hash.as_ref() != sync_file.hash.clone() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Received file does not correspond to requested hash",
+                    ));
+                }
+
+                let mut file = directory.path.clone();
+                file.push(sync_file.get_name(directory));
+                log::info!("Writing to path {:?}", file);
+                let mut o = File::create(file)?;
+                o.write_all(response.data.as_slice())?;
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Got error on file request, and I don't know how to handle errors.",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn get_directory(&self, directory: &SyncDirectory) -> io::Result<()> {
+        let indexes = self.indexes.lock().unwrap();
+        if let Some(index) = indexes.get(&directory.id) {
+            for file in &index.files {
+                let mut path = directory.path.clone();
+                path.push(file.name.clone());
+                let file = SyncFile {
+                    path,
+                    hash: file.blocks.first().unwrap().hash.clone(),
+                };
+                self.get_file(directory, &file).await?;
+            }
+            Ok(())
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Cannot request directory. Still waiting for index.",
+            ));
         }
     }
 
@@ -82,7 +223,7 @@ impl PeerConnectionInner {
     }
 
     pub async fn submit_request(
-        &mut self,
+        &self,
         id: i32,
         response_type: PeerRequestResponseType,
         msg: Vec<u8>,
@@ -247,6 +388,15 @@ async fn handle_response(
     }
 }
 
+async fn handle_index(index: items::Index, inner: PeerConnectionInner) -> tokio::io::Result<()> {
+    inner
+        .indexes
+        .lock()
+        .unwrap()
+        .insert(index.folder.clone(), index);
+    Ok(())
+}
+
 /// The main function of the server. Decode a message, and handle it accordingly
 async fn handle_reading(
     stream: &mut ReadHalf<impl AsyncRead>,
@@ -268,6 +418,9 @@ async fn handle_reading(
             log::info!("{}: Handling request", inner.get_name());
             let innerclone = inner.clone();
             handle_request(stream, innerclone).await?;
+        } else if header.r#type == items::MessageType::Index as i32 {
+            let index = receive_message!(items::Index, stream)?;
+            handle_index(index, inner.clone()).await?;
         } else if header.r#type == items::MessageType::Response as i32 {
             let innerclone = inner.clone();
             handle_response(stream, innerclone).await?;
@@ -278,10 +431,7 @@ async fn handle_reading(
                 inner.get_name(),
                 close.reason
             );
-            return Err(io::Error::new(
-                io::ErrorKind::ConnectionReset,
-                "Connection was closed",
-            ));
+            return Ok(());
         } else {
             log::error!(
                 "{}: Got unknown message type {}",
@@ -341,7 +491,7 @@ pub async fn handle_connection(
     }
     let (mut rd, wr) = tokio::io::split(stream);
 
-    //inner.send_index().await?;
+    inner.send_index().await?;
 
     // TODO: More graceful shutdown that abort
     let name = inner.get_name();

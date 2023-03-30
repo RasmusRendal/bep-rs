@@ -33,6 +33,7 @@ macro_rules! implement {
 implement!(Close);
 implement!(Request);
 implement!(Response);
+implement!(Index);
 
 /// Given a stream, read a four-byte length, and then
 /// the message
