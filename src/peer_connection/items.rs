@@ -34,6 +34,21 @@ implement!(Close);
 implement!(Request);
 implement!(Response);
 
+/// Given a stream, read a four-byte length, and then
+/// the message
+#[macro_export]
+macro_rules! receive_message {
+    ( $type:ty, $stream:expr ) => {{
+        let msg_len = $stream.read_u32().await? as usize;
+        if msg_len == 0 {
+            log::error!("Message is empty");
+        }
+        let mut message_buffer = vec![0u8; msg_len];
+        $stream.read_exact(&mut message_buffer).await?;
+        <$type>::decode(&*message_buffer)
+    }};
+}
+
 /// Given a socket, send a BEP hello message
 pub async fn send_hello(socket: &mut (impl AsyncWriteExt + Unpin), name: String) -> io::Result<()> {
     let magic = HELLO_MAGIC.to_be_bytes().to_vec();
@@ -68,14 +83,7 @@ pub async fn receive_hello(socket: &mut (impl AsyncReadExt + Unpin)) -> io::Resu
         ));
     }
 
-    let hello_len = socket.read_u32().await? as usize;
-    if hello_len == 0 {
-        log::error!("Message is empty");
-    }
-    let mut message_buffer = vec![0u8; hello_len];
-    socket.read_exact(&mut message_buffer).await?;
-    let hello = Hello::decode(&*message_buffer)?;
-    Ok(hello)
+    Ok(receive_message!(Hello, socket)?)
 }
 
 pub async fn exchange_hellos(
