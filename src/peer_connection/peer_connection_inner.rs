@@ -70,15 +70,7 @@ impl PeerConnectionInner {
         self.state.lock().unwrap().get_name()
     }
 
-    pub fn get_peer_name(&self) -> Option<String> {
-        self.hello
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|x| x.device_name.clone())
-    }
-
-    pub async fn submit_message(&mut self, msg: Vec<u8>) {
+    pub async fn submit_message(&self, msg: Vec<u8>) {
         let r = self.tx.send((None, msg)).await;
         if let Err(e) = r {
             log::error!(
@@ -291,6 +283,11 @@ async fn handle_reading(
                 "Connection was closed",
             ));
         } else {
+            log::error!(
+                "{}: Got unknown message type {}",
+                inner.get_name(),
+                header.r#type
+            );
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Unknown message type",
@@ -326,13 +323,25 @@ pub async fn handle_connection(
     inner: PeerConnectionInner,
 ) -> tokio::io::Result<()> {
     let hello = items::exchange_hellos(&mut stream, inner.get_name().to_string()).await?;
+
     log::info!(
         "{}: Received hello from {}",
         inner.get_name(),
         hello.client_name
     );
     *inner.hello.lock().unwrap() = Some(hello);
+    if inner.get_peer().is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!(
+                "Cannot connect to non-peered device {}",
+                inner.hello.lock().unwrap().as_ref().unwrap().device_name
+            ),
+        ));
+    }
     let (mut rd, wr) = tokio::io::split(stream);
+
+    //inner.send_index().await?;
 
     // TODO: More graceful shutdown that abort
     let name = inner.get_name();
