@@ -1,6 +1,6 @@
 use beercanlib::bep_state::BepState;
 use beercanlib::peer_connection::*;
-use beercanlib::sync_directory::{SyncDirectory, SyncFile};
+use beercanlib::sync_directory::SyncFile;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
@@ -46,11 +46,11 @@ async fn test_double_close_err() -> io::Result<()> {
     let (client, server) = tokio::io::duplex(64);
     let mut connection1 = PeerConnection::new(client, state1);
     let mut connection2 = PeerConnection::new(server, state2);
-    connection1.close().await.unwrap();
+    connection1.close().await?;
     log::info!("test_double_close_err: Close 1 completed");
-    connection2.close().await.unwrap();
+    connection2.close().await?;
     log::info!("test_double_close_err: Close 2 completed");
-    connection1.close().await.unwrap();
+    connection1.close().await?;
     log::info!("test_double_close_err: Close 3 completed");
     Ok(())
 }

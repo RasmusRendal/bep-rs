@@ -47,33 +47,40 @@ pub struct PeerConnectionInner {
     requests: Arc<Mutex<HashMap<i32, PeerRequestListener>>>,
     hello: Arc<Mutex<Option<items::Hello>>>,
     tx: Sender<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>,
-    // Receiver for messages that should be sent
-    // Should only be accessed by handle_writing
-    rx: Arc<tokio::sync::Mutex<Receiver<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>>>,
     shutdown_send: UnboundedSender<()>,
-    shutdown_recv: Arc<tokio::sync::Mutex<UnboundedReceiver<()>>>,
 }
 
 impl PeerConnectionInner {
-    pub fn new(state: Arc<Mutex<BepState>>) -> Self {
+    pub fn new(
+        state: Arc<Mutex<BepState>>,
+        socket: (impl AsyncWrite + AsyncRead + Unpin + Send + 'static),
+    ) -> Self {
         let (tx, rx) = channel(100);
         let (shutdown_send, shutdown_recv) = tokio::sync::mpsc::unbounded_channel::<()>();
-        PeerConnectionInner {
+        let inner = PeerConnectionInner {
             state,
             indexes: Arc::new(Mutex::new(HashMap::new())),
             requests: Arc::new(Mutex::new(HashMap::new())),
             hello: Arc::new(Mutex::new(None)),
             tx,
-            rx: Arc::new(tokio::sync::Mutex::new(rx)),
             shutdown_send,
-            shutdown_recv: Arc::new(tokio::sync::Mutex::new(shutdown_recv)),
-        }
+        };
+        let innerc = inner.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle_connection(socket, inner.clone(), rx, shutdown_recv).await {
+                log::error!("{}: Error occured in client {}", inner.get_name(), e);
+            }
+        });
+        innerc
     }
 
     pub async fn send_index(&self) -> io::Result<()> {
         if let Some(peer) = self.get_peer() {
             let directories = self.state.lock().unwrap().get_sync_directories();
             for dir in directories {
+                if !self.state.lock().unwrap().is_directory_synced(&dir, &peer) {
+                    continue;
+                }
                 let index = items::Index {
                     folder: dir.id.clone(),
                     files: dir
@@ -254,10 +261,17 @@ impl PeerConnectionInner {
         }
         match rx.await {
             Ok(r) => Ok(r),
-            Err(e) => Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Got an error while trying to close connection",
-            )),
+            Err(e) => {
+                log::error!(
+                    "{}: Got error while closing connection {}",
+                    self.get_name(),
+                    e
+                );
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Got an error while trying to close connection",
+                ))
+            }
         }
     }
 
@@ -446,14 +460,26 @@ async fn handle_reading(
     }
 }
 
+async fn close_receiver(mut rx: Receiver<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>) {
+    while let Some((txo, _msg)) = rx.recv().await {
+        if let Some(tx) = txo {
+            tx.send(PeerRequestResponse::Closed);
+        }
+    }
+    rx.close();
+}
+
 async fn handle_writing(
     mut wr: WriteHalf<impl AsyncWriteExt>,
     inner: PeerConnectionInner,
+    mut rx: Receiver<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>,
 ) -> tokio::io::Result<()> {
-    let mut rx = inner.rx.lock().await;
     while let Some((tx, msg)) = rx.recv().await {
         log::info!("{}: Wrote message", inner.get_name());
-        wr.write_all(&msg).await?;
+        if let Err(e) = wr.write_all(&msg).await {
+            close_receiver(rx).await;
+            return Err(e);
+        }
         if let Some(tx) = tx {
             let r = tx.send(PeerRequestResponse::Sent);
             if let Err(_e) = r {
@@ -461,7 +487,7 @@ async fn handle_writing(
             }
         }
     }
-    rx.close();
+    close_receiver(rx).await;
     Ok(())
 }
 
@@ -471,6 +497,8 @@ async fn handle_writing(
 pub async fn handle_connection(
     mut stream: (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
     inner: PeerConnectionInner,
+    mut rx: Receiver<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>,
+    mut shutdown_recv: UnboundedReceiver<()>,
 ) -> tokio::io::Result<()> {
     let hello = items::exchange_hellos(&mut stream, inner.get_name().to_string()).await?;
 
@@ -510,26 +538,15 @@ pub async fn handle_connection(
     let innerclone = inner.clone();
     let name = inner.get_name();
     let s2 = tokio::spawn(async move {
-        let r = handle_writing(wr, innerclone).await;
+        let r = handle_writing(wr, innerclone, rx).await;
         if let Err(e) = &r {
             log::error!("{}: Got error from writer: {}", name, e);
         }
         let _r = sendclone.send(());
         r
     });
-    let mut shutdown_recv = inner.shutdown_recv.lock().await;
     shutdown_recv.recv().await;
     shutdown_recv.close();
-    s1.abort();
-    s2.abort();
-
-    let mut rx = inner.rx.lock().await;
-    rx.close();
-    while let Some((txo, _msg)) = rx.recv().await {
-        if let Some(tx) = txo {
-            tx.send(PeerRequestResponse::Closed);
-        }
-    }
 
     log::info!("{}: Shutting down server", inner.get_name());
 

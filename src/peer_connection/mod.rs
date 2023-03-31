@@ -3,17 +3,11 @@ mod items;
 mod peer_connection_inner;
 use super::bep_state::BepState;
 use super::sync_directory::{SyncDirectory, SyncFile};
-use items::EncodableItem;
 use log;
 use peer_connection_inner::{
     handle_connection, PeerConnectionInner, PeerRequestResponse, PeerRequestResponseType,
 };
-use rand::distributions::Standard;
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
-use ring::digest;
-use std::fs::File;
-use std::io::{self, Write};
+use std::io;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -38,15 +32,10 @@ impl PeerConnection {
         socket: (impl AsyncWrite + AsyncRead + Unpin + Send + 'static),
         state: Arc<Mutex<BepState>>,
     ) -> Self {
-        let inner = PeerConnectionInner::new(state);
+        let inner = PeerConnectionInner::new(state, socket);
         let me = PeerConnection {
             inner: inner.clone(),
         };
-        tokio::spawn(async move {
-            if let Err(e) = handle_connection(socket, inner.clone()).await {
-                log::error!("{}: Error occured in client {}", inner.get_name(), e);
-            }
-        });
         me
     }
 
