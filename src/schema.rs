@@ -31,6 +31,24 @@ diesel::table! {
 }
 
 diesel::table! {
+    sync_file_versions (id) {
+        id -> Nullable<Integer>,
+        version_id -> Nullable<BigInt>,
+        sync_file_id -> Nullable<BigInt>,
+        user_id -> Nullable<Integer>,
+    }
+}
+
+diesel::table! {
+    sync_files (id) {
+        id -> Nullable<Integer>,
+        modified_by -> Nullable<BigInt>,
+        sequence -> Nullable<BigInt>,
+        synced_version_id -> Nullable<Integer>,
+    }
+}
+
+diesel::table! {
     sync_folders (id) {
         id -> Nullable<Text>,
         label -> Text,
@@ -47,5 +65,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     folder_shares,
     peer_addresses,
     peers,
+    sync_file_versions,
+    sync_files,
     sync_folders,
 );

@@ -36,3 +36,17 @@ pub struct PeerAddress {
     pub address: String,
     pub peer_id: Option<i32>,
 }
+
+#[derive(Identifiable, Queryable, Insertable)]
+pub struct SyncFile {
+    pub id: Option<i32>,
+    pub modified_by: i64,
+    pub sequence: i64,
+}
+
+pub struct SyncFileVersion {
+    pub id: Option<i32>,
+    pub version_id: u64,
+    pub user_id: u64,
+    pub sync_file_id: i32,
+}

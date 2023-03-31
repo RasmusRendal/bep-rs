@@ -16,6 +16,9 @@ pub struct SyncBlock {
 pub struct SyncFile {
     pub path: PathBuf,
     pub hash: Vec<u8>,
+    pub modified_by: u64,
+    pub synced_version: u64,
+    pub versions: Vec<(u64, u64)>,
 }
 
 /// A directory that we should be syncing

@@ -28,3 +28,21 @@ CREATE TABLE peer_addresses (
     peer_id INTEGER,
     FOREIGN KEY(peer_id) REFERENCES peers(id)
 );
+
+CREATE TABLE sync_files (
+    id INTEGER PRIMARY KEY,
+    modified_by BIGINT,
+    sequence BIGINT,
+    synced_version_id INTEGER,
+    FOREIGN KEY (synced_version_id) REFERENCES sync_file_versions(id)
+);
+
+/* The version_id should be incrementing for each individual sync_file
+   The regular id is just for the benefit of sqlite */
+CREATE TABLE sync_file_versions (
+    id INTEGER PRIMARY KEY,
+    version_id BIGINT,
+    sync_file_id BIGINT,
+    user_id INTEGER,
+    FOREIGN KEY (sync_file_id) REFERENCES sync_files(id)
+);
