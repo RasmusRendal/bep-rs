@@ -44,6 +44,7 @@ pub struct PeerRequestListener {
 pub struct PeerConnectionInner {
     state: Arc<Mutex<BepState>>,
     indexes: Arc<Mutex<HashMap<String, items::Index>>>,
+    // Handles for pending requests that need to be answered
     requests: Arc<Mutex<HashMap<i32, PeerRequestListener>>>,
     hello: Arc<Mutex<Option<items::Hello>>>,
     tx: Sender<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>,
@@ -463,7 +464,7 @@ async fn handle_reading(
 async fn close_receiver(mut rx: Receiver<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>) {
     while let Some((txo, _msg)) = rx.recv().await {
         if let Some(tx) = txo {
-            tx.send(PeerRequestResponse::Closed);
+            tx.send(PeerRequestResponse::Sent);
         }
     }
     rx.close();
@@ -491,17 +492,11 @@ async fn handle_writing(
     Ok(())
 }
 
-/// Starts two tasks, one that sends data over TCP, and one that receives
-/// If as a result of receiving a message, the server wants to transmit something,
-/// it simply adds is to the tx queue
-pub async fn handle_connection(
-    mut stream: (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
-    inner: PeerConnectionInner,
-    mut rx: Receiver<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>,
-    mut shutdown_recv: UnboundedReceiver<()>,
-) -> tokio::io::Result<()> {
-    let hello = items::exchange_hellos(&mut stream, inner.get_name().to_string()).await?;
-
+pub async fn handle_hello(
+    stream: &mut (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
+    inner: &PeerConnectionInner,
+) -> io::Result<()> {
+    let hello = items::exchange_hellos(stream, inner.get_name().to_string()).await?;
     log::info!(
         "{}: Received hello from {}",
         inner.get_name(),
@@ -517,11 +512,23 @@ pub async fn handle_connection(
             ),
         ));
     }
-    let (mut rd, wr) = tokio::io::split(stream);
+    Ok(())
+}
 
+/// Starts two tasks, one that sends data over TCP, and one that receives
+/// If as a result of receiving a message, the server wants to transmit something,
+/// it simply adds is to the tx queue
+pub async fn handle_connection(
+    mut stream: (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
+    inner: PeerConnectionInner,
+    mut rx: Receiver<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>,
+    mut shutdown_recv: UnboundedReceiver<()>,
+) -> tokio::io::Result<()> {
+    handle_hello(&mut stream, &inner).await?;
+
+    let (mut rd, wr) = tokio::io::split(stream);
     inner.send_index().await?;
 
-    // TODO: More graceful shutdown that abort
     let name = inner.get_name();
     let sendclone = inner.shutdown_send.clone();
     let innerclone = inner.clone();
