@@ -88,7 +88,7 @@ impl PeerConnectionInner {
                 let index = items::Index {
                     folder: dir.id.clone(),
                     files: dir
-                        .generate_index()
+                        .generate_index(&mut self.state.as_ref().lock().unwrap())
                         .iter()
                         .map(|x| items::FileInfo {
                             name: x.get_name(&dir),
@@ -330,7 +330,7 @@ pub async fn handle_request(
         .state
         .lock()
         .unwrap()
-        .get_sync_directory(request.folder);
+        .get_sync_directory(&request.folder);
 
     let peer = inner.get_peer().unwrap();
 

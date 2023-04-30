@@ -43,16 +43,21 @@ pub struct PeerAddress {
     pub peer_id: Option<i32>,
 }
 
-#[derive(Identifiable, Queryable, Insertable)]
+#[derive(Identifiable, Queryable, Insertable, PartialEq, Debug)]
 pub struct SyncFile {
     pub id: Option<i32>,
+    pub name: String,
     pub modified_by: i64,
     pub sequence: i64,
+    pub synced_version_id: i64,
+    pub hash: Option<Vec<u8>>,
+    pub folder_id: String,
 }
 
+#[derive(Identifiable, Queryable)]
 pub struct SyncFileVersion {
     pub id: Option<i32>,
-    pub version_id: u64,
-    pub user_id: u64,
-    pub sync_file_id: i32,
+    pub version_id: i64,
+    pub user_id: i64,
+    pub sync_file_id: Option<i32>,
 }

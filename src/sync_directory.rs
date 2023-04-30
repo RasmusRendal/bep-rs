@@ -1,3 +1,4 @@
+use super::bep_state::BepState;
 use ring::digest;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -29,23 +30,48 @@ pub struct SyncDirectory {
     pub path: PathBuf,
 }
 
+fn comp_hashes(h1: &Vec<u8>, h2: &Vec<u8>) -> bool {
+    if h1.len() != h2.len() {
+        return false;
+    }
+    for i in 0..h1.len() {
+        if h1[i] != h2[i] {
+            return false;
+        }
+    }
+    true
+}
+
 impl SyncDirectory {
-    pub fn generate_index(&self) -> Vec<SyncFile> {
+    pub fn generate_index(&self, state: &mut BepState) -> Vec<SyncFile> {
+        let short_id = state.get_short_id();
         let path = self.path.clone();
-        let mut files: Vec<SyncFile> = Vec::new();
+        let mut files = state.get_sync_files(&self.id);
         for file in path.read_dir().unwrap().flatten() {
             let mut buf_reader = BufReader::new(File::open(file.path()).unwrap());
             let mut data = Vec::new();
             buf_reader.read_to_end(&mut data).unwrap();
-
             let hash = digest::digest(&digest::SHA256, &data).as_ref().to_vec();
-            files.push(SyncFile {
-                path: file.path().clone(),
-                hash,
-                modified_by: 1000,
-                synced_version: 1,
-                versions: vec![],
-            });
+
+            match files.iter_mut().find(|x| x.path == file.path()) {
+                Some(index_file) => {
+                    if index_file.versions.last().unwrap().1 == index_file.synced_version {
+                        if !comp_hashes(&hash, &index_file.hash) {
+                            let vnumber = index_file.versions.last().unwrap().1 + 1;
+                            index_file.versions.push((short_id, vnumber));
+                        }
+                    }
+                }
+                None => {
+                    files.push(SyncFile {
+                        path: file.path().clone(),
+                        hash,
+                        modified_by: short_id,
+                        synced_version: 1,
+                        versions: vec![(short_id, 1)],
+                    });
+                }
+            }
         }
         files
     }
@@ -93,6 +119,9 @@ mod tests {
 
     #[test]
     fn test_generate_index() {
+        let statedir = tempfile::tempdir().unwrap().into_path();
+        let mut state = BepState::new(statedir);
+
         let file_contents = "hello world";
         let filename = "testfile";
         let hash: Vec<u8> = b"\xb9\x4d\x27\xb9\x93\x4d\x3e\x08\xa5\x2e\x52\xd7\xda\x7d\xab\xfa\xc4\x84\xef\xe3\x7a\x53\x80\xee\x90\x88\xf7\xac\xe2\xef\xcd\xe9".to_vec();
@@ -105,12 +134,9 @@ mod tests {
             o.write_all(file_contents.as_bytes()).unwrap();
         }
 
-        let directory = SyncDirectory {
-            id: "someid".to_string(),
-            label: "dir".to_string(),
-            path,
-        };
-        let mut index = directory.generate_index();
+        let directory = state.add_sync_directory(path.clone(), None);
+
+        let mut index = directory.generate_index(&mut state);
         assert!(index.len() == 1);
         let fileinfo = index.pop().unwrap();
         assert!(fileinfo.path == helloworld);
