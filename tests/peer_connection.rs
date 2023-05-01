@@ -18,12 +18,18 @@ async fn test_open_close() -> io::Result<()> {
     let statedir2 = tempfile::tempdir().unwrap().into_path();
     let state2 = Arc::new(Mutex::new(BepState::new(statedir2)));
     state2.lock().unwrap().set_name("con2".to_string());
-    state2.lock().unwrap().add_peer("con1".to_string());
-    state1.lock().unwrap().add_peer("con2".to_string());
+    state2
+        .lock()
+        .unwrap()
+        .add_peer("con1".to_string(), state1.lock().unwrap().get_id());
+    state1
+        .lock()
+        .unwrap()
+        .add_peer("con2".to_string(), state2.lock().unwrap().get_id());
 
     let (client, server) = tokio::io::duplex(64);
-    let mut connection1 = PeerConnection::new(client, state1);
-    let mut connection2 = PeerConnection::new(server, state2);
+    let mut connection1 = PeerConnection::new(client, state1, false);
+    let mut connection2 = PeerConnection::new(server, state2, true);
     connection1.close().await.unwrap();
     connection2.close().await.unwrap();
     assert!(connection1.get_peer_name().unwrap() == "con2".to_string());
@@ -40,12 +46,18 @@ async fn test_double_close_err() -> io::Result<()> {
     let statedir2 = tempfile::tempdir().unwrap().into_path();
     let state2 = Arc::new(Mutex::new(BepState::new(statedir2)));
     state2.lock().unwrap().set_name("con2".to_string());
-    state2.lock().unwrap().add_peer("con1".to_string());
-    state1.lock().unwrap().add_peer("con2".to_string());
+    state2
+        .lock()
+        .unwrap()
+        .add_peer("con1".to_string(), state1.lock().unwrap().get_id());
+    state1
+        .lock()
+        .unwrap()
+        .add_peer("con2".to_string(), state2.lock().unwrap().get_id());
 
     let (client, server) = tokio::io::duplex(64);
-    let mut connection1 = PeerConnection::new(client, state1);
-    let mut connection2 = PeerConnection::new(server, state2);
+    let mut connection1 = PeerConnection::new(client, state1, false);
+    let mut connection2 = PeerConnection::new(server, state2, true);
     connection1.close().await?;
     log::info!("test_double_close_err: Close 1 completed");
     connection2.close().await?;
@@ -92,21 +104,30 @@ async fn test_get_file() -> io::Result<()> {
         .unwrap()
         .add_sync_directory(dstpath.clone(), Some(srcdir.id.clone()));
 
-    state1.lock().unwrap().add_peer("con2".to_string());
-    let peer = state2.lock().unwrap().add_peer("con1".to_string());
+    state1
+        .lock()
+        .unwrap()
+        .add_peer("con2".to_string(), state2.lock().unwrap().get_id());
+    let peer = state2
+        .lock()
+        .unwrap()
+        .add_peer("con1".to_string(), state1.lock().unwrap().get_id());
     state2
         .lock()
         .unwrap()
         .sync_directory_with_peer(&srcdir, &peer);
     let (client, server) = tokio::io::duplex(1024);
-    let mut connection1 = PeerConnection::new(client, state1);
-    let mut connection2 = PeerConnection::new(server, state2);
+    let mut connection1 = PeerConnection::new(client, state1, false);
+    let mut connection2 = PeerConnection::new(server, state2, true);
 
     let mut dstfile = dstpath.clone();
     dstfile.push("testfile");
     let file = SyncFile {
         path: dstfile.clone(),
         hash,
+        modified_by: 0,
+        synced_version: 0,
+        versions: vec![],
     };
 
     connection1.get_file(&dstdir, &file).await?;
@@ -156,18 +177,26 @@ async fn test_nonsynced_directory() -> io::Result<()> {
         .unwrap()
         .add_sync_directory(dstpath.clone(), Some(srcdir.id.clone()));
 
-    state1.lock().unwrap().add_peer("con2".to_string());
-    let peer = state2.lock().unwrap().add_peer("con1".to_string());
-    // state2.lock().unwrap().sync_directory_with_peer(&srcdir, &peer);
+    state1
+        .lock()
+        .unwrap()
+        .add_peer("con2".to_string(), state2.lock().unwrap().get_id());
+    let _ = state2
+        .lock()
+        .unwrap()
+        .add_peer("con1".to_string(), state1.lock().unwrap().get_id());
     let (client, server) = tokio::io::duplex(1024);
-    let mut connection1 = PeerConnection::new(client, state1);
-    let mut connection2 = PeerConnection::new(server, state2);
+    let mut connection1 = PeerConnection::new(client, state1, false);
+    let mut connection2 = PeerConnection::new(server, state2, true);
 
     let mut filepath = dstpath.clone();
     filepath.push("testfile");
     let file = SyncFile {
         path: filepath,
         hash,
+        modified_by: 0,
+        synced_version: 1,
+        versions: vec![],
     };
 
     let e = connection1.get_file(&dstdir, &file).await;
@@ -213,8 +242,14 @@ async fn test_get_directory() -> io::Result<()> {
         .unwrap()
         .add_sync_directory(dstpath.clone(), Some(srcdir.id.clone()));
 
-    let peer1 = state2.lock().unwrap().add_peer("con1".to_string());
-    let peer2 = state1.lock().unwrap().add_peer("con2".to_string());
+    let peer1 = state2
+        .lock()
+        .unwrap()
+        .add_peer("con1".to_string(), state1.lock().unwrap().get_id());
+    let peer2 = state1
+        .lock()
+        .unwrap()
+        .add_peer("con2".to_string(), state2.lock().unwrap().get_id());
     state2
         .lock()
         .unwrap()
@@ -225,8 +260,8 @@ async fn test_get_directory() -> io::Result<()> {
         .sync_directory_with_peer(&srcdir, &peer2);
 
     let (client, server) = tokio::io::duplex(1024);
-    let mut connection1 = PeerConnection::new(client, state1);
-    let mut connection2 = PeerConnection::new(server, state2);
+    let mut connection1 = PeerConnection::new(client, state1, false);
+    let mut connection2 = PeerConnection::new(server, state2, true);
 
     // Wait for the index to be received
     // TODO: Introduce a call that lets us wait until the connection is set up

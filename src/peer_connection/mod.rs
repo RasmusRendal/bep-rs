@@ -1,6 +1,7 @@
 #[macro_use]
 mod items;
 mod peer_connection_inner;
+mod verifier;
 use super::bep_state::BepState;
 use super::sync_directory::{SyncDirectory, SyncFile};
 use log;
@@ -31,12 +32,10 @@ impl PeerConnection {
     pub fn new(
         socket: (impl AsyncWrite + AsyncRead + Unpin + Send + 'static),
         state: Arc<Mutex<BepState>>,
+        connector: bool,
     ) -> Self {
-        let inner = PeerConnectionInner::new(state, socket);
-        let me = PeerConnection {
-            inner: inner.clone(),
-        };
-        me
+        let inner = PeerConnectionInner::new(state, socket, connector);
+        PeerConnection { inner }
     }
 
     async fn submit_request(
@@ -74,21 +73,19 @@ impl PeerConnection {
                     self.inner.get_name(),
                     e
                 );
-                return Err(io::Error::new(
+                Err(io::Error::new(
                     io::ErrorKind::Other,
                     "Got an error while trying to close connection",
-                ));
+                ))
             }
-            _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Invalid response to close request. This should not happen.",
-                ));
-            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid response to close request. This should not happen.",
+            )),
         }
     }
 
     pub fn get_peer_name(&self) -> Option<String> {
-        return self.inner.get_peer().map(|x| x.name);
+        self.inner.get_peer().map(|x| x.name)
     }
 }

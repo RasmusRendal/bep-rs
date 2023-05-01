@@ -33,18 +33,19 @@ impl SyncDirectory {
     pub fn generate_index(&self) -> Vec<SyncFile> {
         let path = self.path.clone();
         let mut files: Vec<SyncFile> = Vec::new();
-        for e in path.read_dir().unwrap() {
-            if let Ok(file) = e {
-                let mut buf_reader = BufReader::new(File::open(file.path()).unwrap());
-                let mut data = Vec::new();
-                buf_reader.read_to_end(&mut data).unwrap();
+        for file in path.read_dir().unwrap().flatten() {
+            let mut buf_reader = BufReader::new(File::open(file.path()).unwrap());
+            let mut data = Vec::new();
+            buf_reader.read_to_end(&mut data).unwrap();
 
-                let hash = digest::digest(&digest::SHA256, &data).as_ref().to_vec();
-                files.push(SyncFile {
-                    path: file.path().clone(),
-                    hash,
-                });
-            }
+            let hash = digest::digest(&digest::SHA256, &data).as_ref().to_vec();
+            files.push(SyncFile {
+                path: file.path().clone(),
+                hash,
+                modified_by: 1000,
+                synced_version: 1,
+                versions: vec![],
+            });
         }
         files
     }
@@ -130,6 +131,9 @@ mod tests {
         let file = SyncFile {
             path: filepath,
             hash: vec![],
+            modified_by: 0,
+            synced_version: 0,
+            versions: vec![],
         };
 
         assert!(file.get_name(&directory) == "somefile");

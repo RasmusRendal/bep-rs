@@ -1,4 +1,5 @@
 use super::items::{self, EncodableItem};
+use super::verifier::verify_connection;
 use crate::bep_state::BepState;
 use crate::models::Peer;
 use crate::sync_directory::{SyncDirectory, SyncFile};
@@ -21,7 +22,6 @@ use tokio::sync::mpsc::{channel, Receiver, Sender, UnboundedReceiver, UnboundedS
 #[derive(Copy, Clone, PartialEq)]
 pub enum PeerRequestResponseType {
     None,
-    WhenClosed,
     WhenSent,
     WhenResponse,
 }
@@ -55,6 +55,7 @@ impl PeerConnectionInner {
     pub fn new(
         state: Arc<Mutex<BepState>>,
         socket: (impl AsyncWrite + AsyncRead + Unpin + Send + 'static),
+        connector: bool,
     ) -> Self {
         let (tx, rx) = channel(100);
         let (shutdown_send, shutdown_recv) = tokio::sync::mpsc::unbounded_channel::<()>();
@@ -68,7 +69,9 @@ impl PeerConnectionInner {
         };
         let innerc = inner.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(socket, inner.clone(), rx, shutdown_recv).await {
+            if let Err(e) =
+                handle_connection(socket, inner.clone(), rx, shutdown_recv, connector).await
+            {
                 log::error!("{}: Error occured in client {}", inner.get_name(), e);
             }
         });
@@ -203,15 +206,18 @@ impl PeerConnectionInner {
                 let file = SyncFile {
                     path,
                     hash: file.blocks.first().unwrap().hash.clone(),
+                    modified_by: 1000,
+                    synced_version: 1,
+                    versions: vec![],
                 };
                 self.get_file(directory, &file).await?;
             }
             Ok(())
         } else {
-            return Err(io::Error::new(
+            Err(io::Error::new(
                 io::ErrorKind::Other,
                 "Cannot request directory. Still waiting for index.",
-            ));
+            ))
         }
     }
 
@@ -289,12 +295,7 @@ impl PeerConnectionInner {
             .unwrap()
             .device_name
             .clone();
-        for peer in peers {
-            if name == peer.name {
-                return Some(peer);
-            }
-        }
-        None
+        peers.into_iter().find(|peer| name == peer.name)
     }
 
     pub async fn close(&mut self) -> io::Result<PeerRequestResponse> {
@@ -320,7 +321,7 @@ impl PeerConnectionInner {
 /// At the moment, it always responds with a hardcoded file
 pub async fn handle_request(
     stream: &mut ReadHalf<impl AsyncRead>,
-    mut inner: PeerConnectionInner,
+    inner: PeerConnectionInner,
 ) -> tokio::io::Result<()> {
     let request = receive_message!(items::Request, stream)?;
     log::info!("{}: Received request {:?}", inner.get_name(), request);
@@ -521,18 +522,31 @@ pub async fn handle_hello(
 pub async fn handle_connection(
     mut stream: (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
     inner: PeerConnectionInner,
-    mut rx: Receiver<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>,
+    rx: Receiver<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>,
     mut shutdown_recv: UnboundedReceiver<()>,
+    connector: bool,
 ) -> tokio::io::Result<()> {
     handle_hello(&mut stream, &inner).await?;
 
-    let (mut rd, wr) = tokio::io::split(stream);
+    let peer = inner.get_peer();
+    if peer.is_none() {
+        return Err(io::Error::new(io::ErrorKind::Other, "Unknown peer"));
+    }
+    let peer = peer.unwrap();
+
+    let peerid = peer.device_id.unwrap();
+    let certificate =
+        tokio_rustls::rustls::Certificate(inner.state.lock().unwrap().get_certificate());
+    let key = tokio_rustls::rustls::PrivateKey(inner.state.lock().unwrap().get_key());
+
+    let tcpstream = verify_connection(stream, certificate, key, peerid, connector).await?;
+    let (mut rd, wr) = tokio::io::split(tcpstream);
     inner.send_index().await?;
 
     let name = inner.get_name();
     let sendclone = inner.shutdown_send.clone();
     let innerclone = inner.clone();
-    let s1 = tokio::spawn(async move {
+    tokio::spawn(async move {
         let r = handle_reading(&mut rd, innerclone).await;
         if let Err(e) = &r {
             log::error!("{}: Got error from reader: {}", name, e);
@@ -544,7 +558,7 @@ pub async fn handle_connection(
     let sendclone = inner.shutdown_send.clone();
     let innerclone = inner.clone();
     let name = inner.get_name();
-    let s2 = tokio::spawn(async move {
+    tokio::spawn(async move {
         let r = handle_writing(wr, innerclone, rx).await;
         if let Err(e) = &r {
             log::error!("{}: Got error from writer: {}", name, e);
@@ -552,6 +566,7 @@ pub async fn handle_connection(
         let _r = sendclone.send(());
         r
     });
+
     shutdown_recv.recv().await;
     shutdown_recv.close();
 

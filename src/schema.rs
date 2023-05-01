@@ -4,6 +4,8 @@ diesel::table! {
     device_options (id) {
         id -> Nullable<Integer>,
         device_name -> Text,
+        cert -> Binary,
+        key -> Binary,
     }
 }
 
@@ -26,6 +28,7 @@ diesel::table! {
 diesel::table! {
     peers (id) {
         id -> Nullable<Integer>,
+        device_id -> Nullable<Binary>,
         name -> Text,
     }
 }

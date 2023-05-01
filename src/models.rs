@@ -1,10 +1,15 @@
 use super::schema::*;
 use diesel::prelude::*;
 
+// TODO: It might not be the most secure thing ever to store
+// the certificate in the database, at least the real syncthing
+// client doesn't do this.
 #[derive(Identifiable, Queryable, Insertable)]
 pub struct DeviceOption {
     pub id: Option<i32>,
     pub device_name: String,
+    pub cert: Vec<u8>,
+    pub key: Vec<u8>,
 }
 
 #[derive(Queryable, Insertable)]
@@ -17,6 +22,7 @@ pub struct SyncFolder {
 #[derive(Identifiable, Queryable, Insertable)]
 pub struct Peer {
     pub id: Option<i32>,
+    pub device_id: Option<Vec<u8>>,
     pub name: String,
 }
 

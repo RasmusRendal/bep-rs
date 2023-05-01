@@ -1,6 +1,8 @@
 CREATE TABLE device_options (
     id INTEGER PRIMARY KEY,
-    device_name TEXT NOT NULL
+    device_name TEXT NOT NULL,
+    cert BLOB NOT NULL,
+    key BLOB NOT NULL
 );
 
 CREATE TABLE sync_folders (
@@ -11,6 +13,7 @@ CREATE TABLE sync_folders (
 
 CREATE TABLE peers (
     id INTEGER PRIMARY KEY,
+    device_id BLOB,
     name TEXT UNIQUE NOT NULL
 );
 

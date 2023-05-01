@@ -37,10 +37,31 @@ impl BepState {
         if let Err(e) = connection.run_pending_migrations(MIGRATIONS) {
             panic!("Error when applying database migrations: {}", e);
         }
-        BepState {
+        let mut s = BepState {
             data_directory,
             connection,
+        };
+        if !s.is_initialized() {
+            use crate::schema::device_options;
+
+            // TODO: Generate random name, maybe copy code from Docker or something
+            use rcgen::generate_simple_self_signed;
+            let subject_alt_names =
+                vec!["hello.world.example".to_string(), "localhost".to_string()];
+
+            let scert = generate_simple_self_signed(subject_alt_names).unwrap();
+            let new_options = DeviceOption {
+                id: Some(1),
+                device_name: "Device".to_string(),
+                cert: scert.serialize_der().unwrap(),
+                key: scert.serialize_private_key_der(),
+            };
+            diesel::insert_into(device_options::table)
+                .values(&new_options)
+                .execute(&mut s.connection)
+                .expect("Error adding directory");
         }
+        s
     }
 
     /// Get list of directories to be synced
@@ -61,12 +82,9 @@ impl BepState {
     /// Get a specific sync directory
     pub fn get_sync_directory(&mut self, id: String) -> Option<SyncDirectory> {
         // TODO: Handle this better
-        for dir in self.get_sync_directories() {
-            if dir.id == id {
-                return Some(dir);
-            }
-        }
-        None
+        self.get_sync_directories()
+            .into_iter()
+            .find(|dir| dir.id == id)
     }
 
     fn get_options(&mut self) -> Option<DeviceOption> {
@@ -77,8 +95,32 @@ impl BepState {
             .pop()
     }
 
+    fn is_initialized(&mut self) -> bool {
+        self.get_options().is_some()
+    }
+
+    pub fn get_id(&mut self) -> [u8; 32] {
+        use ring::digest;
+        let cert = self.get_options().unwrap().cert;
+        let hash = digest::digest(&digest::SHA256, &cert);
+        let hashbox: Box<[u8; 32]> = hash
+            .as_ref()
+            .to_owned()
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
+        *hashbox
+    }
+
+    pub fn get_certificate(&mut self) -> Vec<u8> {
+        self.get_options().unwrap().cert
+    }
+
+    pub fn get_key(&mut self) -> Vec<u8> {
+        self.get_options().unwrap().key
+    }
+
     pub fn get_name(&mut self) -> String {
-        //TODO: Generate a random device name
         self.get_options()
             .map(|x| x.device_name)
             .unwrap_or("Device".to_string())
@@ -87,7 +129,6 @@ impl BepState {
     pub fn set_name(&mut self, name: String) {
         use crate::schema::device_options;
         use crate::schema::device_options::dsl;
-        //use crate::schema::device_options;
         if let Some(mut options) = self.get_options() {
             options.device_name = name.clone();
             diesel::insert_into(device_options::table)
@@ -98,14 +139,7 @@ impl BepState {
                 .execute(&mut self.connection)
                 .unwrap();
         } else {
-            let new_options = DeviceOption {
-                id: Some(1),
-                device_name: name,
-            };
-            diesel::insert_into(device_options::table)
-                .values(&new_options)
-                .execute(&mut self.connection)
-                .expect("Error adding directory");
+            panic!("Invalid database: No options");
         }
     }
 
@@ -143,7 +177,8 @@ impl BepState {
             panic!("Folder {} not found", path.display());
         }
 
-        let folder_id = id.unwrap_or(Alphanumeric.sample_string(&mut rand::thread_rng(), 12));
+        let folder_id =
+            id.unwrap_or_else(|| Alphanumeric.sample_string(&mut rand::thread_rng(), 12));
 
         let new_dir = SyncFolder {
             id: Some(folder_id.clone()),
@@ -158,11 +193,12 @@ impl BepState {
         self.get_sync_directory(folder_id).unwrap()
     }
 
-    pub fn add_peer(&mut self, peer_name: String) -> Peer {
+    pub fn add_peer(&mut self, peer_name: String, peer_id: [u8; 32]) -> Peer {
         use crate::schema::peers;
         use crate::schema::peers::dsl::*;
         let p = Peer {
             id: None,
+            device_id: Some(peer_id.to_vec()),
             name: peer_name.clone(),
         };
         diesel::insert_into(peers::table)
@@ -200,7 +236,7 @@ impl BepState {
             .filter(sync_folder_id.eq(directory.id.clone()))
             .filter(peer_id.eq(peer.id.unwrap()))
             .load::<FolderShare>(&mut self.connection)
-            .map(|x| x.len() > 0)
+            .map(|x| !x.is_empty())
             .unwrap_or(false)
     }
 }

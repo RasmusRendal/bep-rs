@@ -10,7 +10,6 @@ diesel = { version = "2.0.0", features = ["sqlite"] }
 diesel_migrations = "2.0.0"
 tokio = { version = "1", features = ["full", "tracing"] }
 rand = "0.8.5"
-rustls = "0.20.8"
 prost = "0.11"
 prost-types = "0.11"
 log = "0.4"
@@ -19,6 +18,8 @@ futures = "0.3.27"
 console-subscriber = "0.1.8"
 tempfile = "3.4.0"
 ring = "0.16.20"
+rcgen = "0.10.0"
+tokio-rustls = { version = "0.24.0", features = [ "dangerous_configuration"] }
 
 [build-dependencies]
 prost-build = "0.11"

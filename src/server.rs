@@ -19,7 +19,7 @@ async fn run_server(address: String, state: Arc<Mutex<BepState>>) -> io::Result<
     loop {
         let (socket, _) = listener.accept().await?;
 
-        PeerConnection::new(socket, state.clone());
+        PeerConnection::new(socket, state.clone(), false);
     }
 }
 
