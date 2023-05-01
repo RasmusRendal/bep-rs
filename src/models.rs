@@ -43,7 +43,7 @@ pub struct PeerAddress {
     pub peer_id: Option<i32>,
 }
 
-#[derive(Identifiable, Queryable, Insertable, PartialEq, Debug)]
+#[derive(Identifiable, Queryable, Insertable, PartialEq, Debug, AsChangeset, Clone)]
 pub struct SyncFile {
     pub id: Option<i32>,
     pub name: String,
@@ -54,7 +54,7 @@ pub struct SyncFile {
     pub folder_id: String,
 }
 
-#[derive(Identifiable, Queryable)]
+#[derive(Identifiable, Queryable, Insertable)]
 pub struct SyncFileVersion {
     pub id: Option<i32>,
     pub version_id: i64,

@@ -204,6 +204,7 @@ impl PeerConnectionInner {
                 let mut path = directory.path.clone();
                 path.push(file.name.clone());
                 let file = SyncFile {
+                    id: None,
                     path,
                     hash: file.blocks.first().unwrap().hash.clone(),
                     modified_by: 1000,

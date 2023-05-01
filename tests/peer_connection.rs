@@ -122,6 +122,7 @@ async fn test_get_file() -> io::Result<()> {
     let mut dstfile = dstpath.clone();
     dstfile.push("testfile");
     let file = SyncFile {
+        id: None,
         path: dstfile.clone(),
         hash,
         modified_by: 0,
@@ -191,6 +192,7 @@ async fn test_nonsynced_directory() -> io::Result<()> {
     let mut filepath = dstpath.clone();
     filepath.push("testfile");
     let file = SyncFile {
+        id: None,
         path: filepath,
         hash,
         modified_by: 0,

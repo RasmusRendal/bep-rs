@@ -15,6 +15,7 @@ pub struct SyncBlock {
 /// A file that we should be syncing
 #[derive(Clone)]
 pub struct SyncFile {
+    pub id: Option<i32>,
     pub path: PathBuf,
     pub hash: Vec<u8>,
     pub modified_by: u64,
@@ -59,17 +60,20 @@ impl SyncDirectory {
                         if !comp_hashes(&hash, &index_file.hash) {
                             let vnumber = index_file.versions.last().unwrap().1 + 1;
                             index_file.versions.push((short_id, vnumber));
+                            state.update_sync_file(self, index_file);
                         }
                     }
                 }
                 None => {
                     files.push(SyncFile {
+                        id: None,
                         path: file.path().clone(),
                         hash,
                         modified_by: short_id,
                         synced_version: 1,
                         versions: vec![(short_id, 1)],
                     });
+                    state.update_sync_file(self, files.last().unwrap());
                 }
             }
         }
@@ -155,6 +159,7 @@ mod tests {
         let mut filepath = path.clone();
         filepath.push("somefile");
         let file = SyncFile {
+            id: None,
             path: filepath,
             hash: vec![],
             modified_by: 0,
@@ -163,5 +168,67 @@ mod tests {
         };
 
         assert!(file.get_name(&directory) == "somefile");
+    }
+
+    #[test]
+    fn test_update_index() {
+        // Tests that a new version of the file is created in the database,
+        // only when we change the file
+        let _ = env_logger::builder().is_test(true).try_init();
+        let statedir = tempfile::tempdir().unwrap().into_path();
+        let mut state = BepState::new(statedir);
+
+        let file_contents = "hello world";
+        let filename = "testfile";
+        let hash: Vec<u8> = b"\xb9\x4d\x27\xb9\x93\x4d\x3e\x08\xa5\x2e\x52\xd7\xda\x7d\xab\xfa\xc4\x84\xef\xe3\x7a\x53\x80\xee\x90\x88\xf7\xac\xe2\xef\xcd\xe9".to_vec();
+
+        let path = tempfile::tempdir().unwrap().into_path();
+        let mut helloworld = path.clone();
+        helloworld.push(filename);
+        {
+            let mut o = File::create(helloworld.clone()).unwrap();
+            o.write_all(file_contents.as_bytes()).unwrap();
+        }
+
+        let directory = state.add_sync_directory(path.clone(), None);
+
+        let mut index = directory.generate_index(&mut state);
+        assert!(index.len() == 1);
+        let mut fileinfo = index.pop().unwrap();
+        assert!(fileinfo.path == helloworld);
+        assert!(fileinfo.hash == hash);
+        assert!(fileinfo.versions.len() == 1);
+        let fileversion = fileinfo.versions.pop().unwrap();
+        assert!(fileversion.0 == state.get_short_id());
+        assert!(fileversion.1 == 1);
+        log::info!("Successfully generated first index");
+
+        let mut index = directory.generate_index(&mut state);
+        assert!(index.len() == 1);
+        let mut fileinfo = index.pop().unwrap();
+        assert!(fileinfo.path == helloworld);
+        assert!(fileinfo.hash == hash);
+        assert!(fileinfo.versions.len() == 1);
+        let fileversion = fileinfo.versions.pop().unwrap();
+        assert!(fileversion.0 == state.get_short_id());
+        assert!(fileversion.1 == 1);
+        log::info!("Successfully generated second index");
+
+        {
+            let mut o = File::create(helloworld.clone()).unwrap();
+            o.write_all("some new contents".as_bytes()).unwrap();
+        }
+
+        let mut index = directory.generate_index(&mut state);
+        assert!(index.len() == 1);
+        let mut fileinfo = index.pop().unwrap();
+        assert!(fileinfo.versions.len() == 2);
+        let fileversion = fileinfo.versions.pop().unwrap();
+        assert!(fileversion.0 == state.get_short_id());
+        assert!(fileversion.1 == 2);
+        let fileversion = fileinfo.versions.pop().unwrap();
+        assert!(fileversion.0 == state.get_short_id());
+        assert!(fileversion.1 == 1);
+        log::info!("Successfully generated third index");
     }
 }
