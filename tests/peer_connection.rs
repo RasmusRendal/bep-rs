@@ -10,7 +10,6 @@ use tokio::io;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_open_close() -> io::Result<()> {
-    console_subscriber::init();
     let _ = env_logger::builder().is_test(true).try_init();
     let statedir1 = tempfile::tempdir().unwrap().into_path();
     let state1 = Arc::new(Mutex::new(BepState::new(statedir1)));

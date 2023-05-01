@@ -1,0 +1,8 @@
+pipeline:
+  build:
+    image: rust:1.69
+    commands:
+      - apt-get update
+      - apt-get install -y protobuf-compiler
+      - cargo test
+
