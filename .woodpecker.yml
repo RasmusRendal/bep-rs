@@ -1,4 +1,9 @@
 pipeline:
+  format:
+    image: rust:1.69
+    commands:
+      - rustup component add rustfmt
+      - find src -type f -name '*.rs' | xargs rustfmt --edition 2021 --check
   build:
     image: rust:1.69
     commands:
