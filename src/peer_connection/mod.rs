@@ -47,6 +47,11 @@ impl PeerConnection {
         self.inner.submit_request(id, response_type, msg).await
     }
 
+    pub async fn send_index(&mut self) -> io::Result<PeerRequestResponse> {
+        self.inner.send_index().await?;
+        Ok(PeerRequestResponse::Sent)
+    }
+
     /// Sync an entire directory from the peer,
     /// overwriting the local copy
     pub async fn get_directory(&mut self, directory: &SyncDirectory) -> tokio::io::Result<()> {

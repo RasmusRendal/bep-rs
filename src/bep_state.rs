@@ -321,6 +321,13 @@ impl BepState {
         peer: &Peer,
     ) {
         use crate::schema::folder_shares;
+        use crate::schema::sync_folders::dsl::*;
+        let s = sync_folders
+            .filter(id.eq(&directory.id))
+            .load::<SyncFolder>(&mut self.connection)
+            .unwrap();
+        assert!(!s.is_empty());
+
         let new_share = FolderShare {
             id: None,
             sync_folder_id: directory.id.clone(),
