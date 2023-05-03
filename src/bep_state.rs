@@ -1,4 +1,5 @@
 use super::models::*;
+use super::peer_connection::PeerConnection;
 use super::sync_directory;
 use diesel::prelude::*;
 use std::fs;
@@ -12,6 +13,7 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations/");
 pub struct BepState {
     pub data_directory: PathBuf,
     connection: SqliteConnection,
+    pub listeners: Vec<PeerConnection>,
 }
 
 fn from_i64(i: i64) -> u64 {
@@ -48,6 +50,7 @@ impl BepState {
         let mut s = BepState {
             data_directory,
             connection,
+            listeners: vec![],
         };
         if !s.is_initialized() {
             use crate::schema::device_options;

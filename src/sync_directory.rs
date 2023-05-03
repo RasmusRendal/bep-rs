@@ -45,6 +45,7 @@ fn comp_hashes(h1: &Vec<u8>, h2: &Vec<u8>) -> bool {
 
 impl SyncDirectory {
     pub fn generate_index(&self, state: &mut BepState) -> Vec<SyncFile> {
+        let mut changed = false;
         let short_id = state.get_short_id();
         let path = self.path.clone();
         let mut files = state.get_sync_files(&self.id);
@@ -56,13 +57,14 @@ impl SyncDirectory {
 
             match files.iter_mut().find(|x| x.path == file.path()) {
                 Some(index_file) => {
-                    if index_file.versions.last().unwrap().1 == index_file.synced_version {
-                        if !comp_hashes(&hash, &index_file.hash) {
-                            let vnumber = index_file.versions.last().unwrap().1 + 1;
-                            index_file.versions.push((short_id, vnumber));
-                            index_file.hash = hash;
-                            state.update_sync_file(self, index_file);
-                        }
+                    if index_file.versions.last().unwrap().1 == index_file.synced_version
+                        && !comp_hashes(&hash, &index_file.hash)
+                    {
+                        let vnumber = index_file.versions.last().unwrap().1 + 1;
+                        index_file.versions.push((short_id, vnumber));
+                        index_file.hash = hash;
+                        state.update_sync_file(self, index_file);
+                        changed = true;
                     }
                 }
                 None => {
@@ -75,7 +77,13 @@ impl SyncDirectory {
                         versions: vec![(short_id, 1)],
                     });
                     state.update_sync_file(self, files.last().unwrap());
+                    changed = true;
                 }
+            }
+        }
+        if changed {
+            for connection in &mut state.listeners {
+                connection.directory_updated(self);
             }
         }
         files

@@ -283,7 +283,7 @@ async fn test_get_directory() -> io::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_update_file() -> io::Result<()> {
     // After receiving a file, we should be able to change it
     let _ = env_logger::builder().is_test(true).try_init();
@@ -381,7 +381,6 @@ async fn test_update_file() -> io::Result<()> {
     assert_eq!(i[0].versions.len(), 2);
 
     // Sync the file modified in dstdir to srcdir
-    connection1.send_index().await?;
     thread::sleep(time::Duration::from_millis(200));
     connection2.get_directory(&srcdir).await?;
     let mut dstfile = srcpath.clone();
@@ -393,7 +392,6 @@ async fn test_update_file() -> io::Result<()> {
     let mut contents = String::new();
     buf_reader.read_to_string(&mut contents)?;
     assert_eq!(contents, file_contents2);
-
     connection1.close().await?;
     connection2.close().await?;
     Ok(())

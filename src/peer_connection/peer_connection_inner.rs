@@ -78,6 +78,22 @@ impl PeerConnectionInner {
         innerc
     }
 
+    pub async fn directory_updated(&self, directory: String) {
+        let mut synced_index_updated = false;
+        if let Some(peer) = self.get_peer() {
+            let mut state = self.state.lock().unwrap();
+            if let Some(directory) = state.get_sync_directory(&directory) {
+                if state.is_directory_synced(&directory, &peer) {
+                    synced_index_updated = true;
+                }
+            }
+        }
+
+        if synced_index_updated {
+            self.send_index().await;
+        }
+    }
+
     pub async fn send_index(&self) -> io::Result<()> {
         if let Some(peer) = self.get_peer() {
             let directories = self.state.lock().unwrap().get_sync_directories();
@@ -609,6 +625,14 @@ pub async fn handle_connection(
 
     shutdown_recv.recv().await;
     shutdown_recv.close();
+
+    // Remove from list of listeners
+    inner
+        .state
+        .lock()
+        .unwrap()
+        .listeners
+        .retain(|x| !x.inner.tx.same_channel(&inner.tx));
 
     log::info!("{}: Shutting down server", inner.get_name());
 
