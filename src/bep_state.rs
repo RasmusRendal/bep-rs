@@ -1,5 +1,6 @@
 use super::models::*;
-use super::sync_directory::*;
+use super::peer_connection::PeerConnection;
+use super::sync_directory;
 use diesel::prelude::*;
 use std::fs;
 use std::path::PathBuf;
@@ -12,6 +13,15 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations/");
 pub struct BepState {
     pub data_directory: PathBuf,
     connection: SqliteConnection,
+    pub listeners: Vec<PeerConnection>,
+}
+
+fn from_i64(i: i64) -> u64 {
+    u64::from_ne_bytes(i.to_ne_bytes())
+}
+
+fn from_u64(i: u64) -> i64 {
+    i64::from_ne_bytes(i.to_ne_bytes())
 }
 
 impl BepState {
@@ -40,6 +50,7 @@ impl BepState {
         let mut s = BepState {
             data_directory,
             connection,
+            listeners: vec![],
         };
         if !s.is_initialized() {
             use crate::schema::device_options;
@@ -65,13 +76,13 @@ impl BepState {
     }
 
     /// Get list of directories to be synced
-    pub fn get_sync_directories(&mut self) -> Vec<SyncDirectory> {
+    pub fn get_sync_directories(&mut self) -> Vec<sync_directory::SyncDirectory> {
         use super::schema::sync_folders::dsl::*;
         sync_folders
             .load::<SyncFolder>(&mut self.connection)
             .unwrap_or_default()
             .iter()
-            .map(|x| SyncDirectory {
+            .map(|x| sync_directory::SyncDirectory {
                 id: x.id.clone().unwrap(),
                 label: x.label.clone(),
                 path: PathBuf::from(x.dir_path.clone()),
@@ -80,11 +91,94 @@ impl BepState {
     }
 
     /// Get a specific sync directory
-    pub fn get_sync_directory(&mut self, id: String) -> Option<SyncDirectory> {
+    pub fn get_sync_directory(&mut self, id: &String) -> Option<sync_directory::SyncDirectory> {
         // TODO: Handle this better
         self.get_sync_directories()
             .into_iter()
-            .find(|dir| dir.id == id)
+            .find(|dir| dir.id == *id)
+    }
+
+    fn get_versions(&mut self, id: i32) -> Vec<(u64, u64)> {
+        use super::schema::sync_file_versions;
+        //TODO: Something about this terrible hack with i64/u64 and diesel
+        sync_file_versions::dsl::sync_file_versions
+            .filter(sync_file_versions::dsl::sync_file_id.eq(id))
+            .load::<SyncFileVersion>(&mut self.connection)
+            .unwrap_or_default()
+            .iter()
+            .map(|x| (from_i64(x.user_id), from_i64(x.version_id)))
+            .collect::<Vec<(u64, u64)>>()
+    }
+
+    pub fn get_sync_files(&mut self, dir_id: &String) -> Vec<sync_directory::SyncFile> {
+        use super::schema::sync_files::dsl::*;
+        let dir = self.get_sync_directory(dir_id).unwrap();
+        sync_files
+            .filter(folder_id.eq(dir_id))
+            .load::<SyncFile>(&mut self.connection)
+            .unwrap()
+            .iter()
+            .map(|x| {
+                let mut path = dir.path.clone();
+                path.push(x.name.clone());
+                sync_directory::SyncFile {
+                    id: x.id,
+                    path,
+                    hash: x.hash.as_ref().unwrap().clone(),
+                    modified_by: from_i64(x.modified_by),
+                    synced_version: from_i64(x.synced_version_id),
+                    versions: self.get_versions(x.id.unwrap()),
+                }
+            })
+            .collect::<Vec<_>>()
+    }
+
+    pub fn update_sync_file(
+        &mut self,
+        dir: &sync_directory::SyncDirectory,
+        file: &sync_directory::SyncFile,
+    ) {
+        use super::schema::sync_file_versions;
+        use super::schema::sync_files;
+        assert!(!file.versions.is_empty());
+        let sync_file = SyncFile {
+            id: file.id,
+            name: file.get_name(dir),
+            modified_by: from_u64(file.modified_by),
+            sequence: from_u64(0),
+            synced_version_id: from_u64(file.synced_version),
+            hash: Some(file.hash.clone()),
+            folder_id: dir.id.clone(),
+        };
+        let inserted = diesel::insert_into(sync_files::table)
+            .values(sync_file.clone())
+            .on_conflict(sync_files::dsl::id)
+            .do_update()
+            .set(sync_file)
+            .execute(&mut self.connection)
+            .unwrap();
+
+        let versions = sync_file_versions::dsl::sync_file_versions
+            .filter(sync_file_versions::dsl::sync_file_id.eq(file.id))
+            .order_by(sync_file_versions::dsl::id.asc())
+            .load::<SyncFileVersion>(&mut self.connection)
+            .unwrap_or_default()
+            .len();
+
+        let versions_to_insert = file.versions.as_slice()[versions..]
+            .iter()
+            .map(|x| SyncFileVersion {
+                id: None,
+                version_id: from_u64(x.1),
+                user_id: from_u64(x.0),
+                sync_file_id: Some(inserted as i32),
+            })
+            .collect::<Vec<_>>();
+
+        diesel::insert_into(sync_file_versions::table)
+            .values(versions_to_insert)
+            .execute(&mut self.connection)
+            .unwrap();
     }
 
     fn get_options(&mut self) -> Option<DeviceOption> {
@@ -110,6 +204,10 @@ impl BepState {
             .try_into()
             .unwrap();
         *hashbox
+    }
+
+    pub fn get_short_id(&mut self) -> u64 {
+        u64::from_ne_bytes(self.get_id()[0..8].try_into().unwrap())
     }
 
     pub fn get_certificate(&mut self) -> Vec<u8> {
@@ -169,7 +267,11 @@ impl BepState {
     }
 
     /// Start syncing some directory
-    pub fn add_sync_directory(&mut self, path: PathBuf, id: Option<String>) -> SyncDirectory {
+    pub fn add_sync_directory(
+        &mut self,
+        path: PathBuf,
+        id: Option<String>,
+    ) -> sync_directory::SyncDirectory {
         use crate::schema::sync_folders;
         use rand::distributions::{Alphanumeric, DistString};
 
@@ -190,7 +292,7 @@ impl BepState {
             .values(&new_dir)
             .execute(&mut self.connection)
             .expect("Error adding directory");
-        self.get_sync_directory(folder_id).unwrap()
+        self.get_sync_directory(&folder_id).unwrap()
     }
 
     pub fn add_peer(&mut self, peer_name: String, peer_id: [u8; 32]) -> Peer {
@@ -216,8 +318,19 @@ impl BepState {
     }
 
     /// Allows the peer to request files from a directory
-    pub fn sync_directory_with_peer(&mut self, directory: &SyncDirectory, peer: &Peer) {
+    pub fn sync_directory_with_peer(
+        &mut self,
+        directory: &sync_directory::SyncDirectory,
+        peer: &Peer,
+    ) {
         use crate::schema::folder_shares;
+        use crate::schema::sync_folders::dsl::*;
+        let s = sync_folders
+            .filter(id.eq(&directory.id))
+            .load::<SyncFolder>(&mut self.connection)
+            .unwrap();
+        assert!(!s.is_empty());
+
         let new_share = FolderShare {
             id: None,
             sync_folder_id: directory.id.clone(),
@@ -229,7 +342,11 @@ impl BepState {
             .expect("Error syncing directory");
     }
 
-    pub fn is_directory_synced(&mut self, directory: &SyncDirectory, peer: &Peer) -> bool {
+    pub fn is_directory_synced(
+        &mut self,
+        directory: &sync_directory::SyncDirectory,
+        peer: &Peer,
+    ) -> bool {
         use crate::schema::folder_shares::dsl::*;
 
         folder_shares

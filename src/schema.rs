@@ -36,18 +36,21 @@ diesel::table! {
 diesel::table! {
     sync_file_versions (id) {
         id -> Nullable<Integer>,
-        version_id -> Nullable<BigInt>,
-        sync_file_id -> Nullable<BigInt>,
-        user_id -> Nullable<Integer>,
+        version_id -> BigInt,
+        user_id -> BigInt,
+        sync_file_id -> Nullable<Integer>,
     }
 }
 
 diesel::table! {
     sync_files (id) {
         id -> Nullable<Integer>,
-        modified_by -> Nullable<BigInt>,
-        sequence -> Nullable<BigInt>,
-        synced_version_id -> Nullable<Integer>,
+        name -> Text,
+        modified_by -> BigInt,
+        sequence -> BigInt,
+        synced_version_id -> BigInt,
+        hash -> Nullable<Binary>,
+        folder_id -> Text,
     }
 }
 
@@ -62,6 +65,7 @@ diesel::table! {
 diesel::joinable!(folder_shares -> peers (peer_id));
 diesel::joinable!(folder_shares -> sync_folders (sync_folder_id));
 diesel::joinable!(peer_addresses -> peers (peer_id));
+diesel::joinable!(sync_files -> sync_folders (folder_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     device_options,

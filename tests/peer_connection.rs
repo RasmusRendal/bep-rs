@@ -122,11 +122,12 @@ async fn test_get_file() -> io::Result<()> {
     let mut dstfile = dstpath.clone();
     dstfile.push("testfile");
     let file = SyncFile {
+        id: None,
         path: dstfile.clone(),
         hash,
         modified_by: 0,
         synced_version: 0,
-        versions: vec![],
+        versions: vec![(1, 1)],
     };
 
     connection1.get_file(&dstdir, &file).await?;
@@ -191,11 +192,12 @@ async fn test_nonsynced_directory() -> io::Result<()> {
     let mut filepath = dstpath.clone();
     filepath.push("testfile");
     let file = SyncFile {
+        id: None,
         path: filepath,
         hash,
         modified_by: 0,
         synced_version: 1,
-        versions: vec![],
+        versions: vec![(1, 1)],
     };
 
     let e = connection1.get_file(&dstdir, &file).await;
@@ -256,7 +258,7 @@ async fn test_get_directory() -> io::Result<()> {
     state1
         .lock()
         .unwrap()
-        .sync_directory_with_peer(&srcdir, &peer2);
+        .sync_directory_with_peer(&dstdir, &peer2);
 
     let (client, server) = tokio::io::duplex(1024);
     let mut connection1 = PeerConnection::new(client, state1, false);
@@ -276,6 +278,120 @@ async fn test_get_directory() -> io::Result<()> {
     let mut contents = String::new();
     buf_reader.read_to_string(&mut contents)?;
     assert_eq!(contents, file_contents);
+    connection1.close().await?;
+    connection2.close().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_update_file() -> io::Result<()> {
+    // After receiving a file, we should be able to change it
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    // Constants
+    let file_contents1 = "hello world";
+    let file_contents2 = "hello other world";
+    let filename = "testfile";
+
+    let statedir1 = tempfile::tempdir().unwrap().into_path();
+    let statedir2 = tempfile::tempdir().unwrap().into_path();
+    let state1 = Arc::new(Mutex::new(BepState::new(statedir1)));
+    let state2 = Arc::new(Mutex::new(BepState::new(statedir2)));
+    state1.lock().unwrap().set_name("con1".to_string());
+    state2.lock().unwrap().set_name("con2".to_string());
+
+    let srcpath = tempfile::tempdir().unwrap().into_path();
+    let dstpath = tempfile::tempdir().unwrap().into_path();
+
+    {
+        let mut helloworld = srcpath.clone();
+        helloworld.push(filename);
+        let mut o = File::create(helloworld)?;
+        o.write_all(file_contents1.as_bytes())?;
+    }
+
+    let srcdir = state2
+        .lock()
+        .unwrap()
+        .add_sync_directory(srcpath.clone(), None);
+    let dstdir = state1
+        .lock()
+        .unwrap()
+        .add_sync_directory(dstpath.clone(), Some(srcdir.id.clone()));
+
+    let peer1 = state2
+        .lock()
+        .unwrap()
+        .add_peer("con1".to_string(), state1.lock().unwrap().get_id());
+    let peer2 = state1
+        .lock()
+        .unwrap()
+        .add_peer("con2".to_string(), state2.lock().unwrap().get_id());
+    state2
+        .lock()
+        .unwrap()
+        .sync_directory_with_peer(&srcdir, &peer1);
+    state1
+        .lock()
+        .unwrap()
+        .sync_directory_with_peer(&dstdir, &peer2);
+
+    let (client, server) = tokio::io::duplex(1024);
+    let mut connection1 = PeerConnection::new(client, state1.clone(), false);
+    let mut connection2 = PeerConnection::new(server, state2, true);
+
+    // Wait for the index to be received
+    // TODO: Introduce a call that lets us wait until the connection is set up
+    thread::sleep(time::Duration::from_millis(200));
+    connection1.get_directory(&dstdir).await?;
+
+    let mut dstfile = dstpath.clone();
+    dstfile.push("testfile");
+    let file = File::open(dstfile);
+    assert!(file.is_ok());
+    let file = file.unwrap();
+    let mut buf_reader = BufReader::new(file);
+    let mut contents = String::new();
+    buf_reader.read_to_string(&mut contents)?;
+    assert_eq!(contents, file_contents1);
+
+    // Now we overwrite the file in dstdir
+    {
+        let mut helloworld = dstpath.clone();
+        helloworld.push(filename);
+        let mut o = File::create(helloworld)?;
+        o.write_all(file_contents2.as_bytes())?;
+    }
+
+    // And then we request the file we just overwrote
+    // However, requesting this file shouldn't overwrite it in dstdir,
+    // because the change we just did is newer than the index in state2
+    connection1.get_directory(&dstdir).await?;
+    let mut dstfile = dstpath.clone();
+    dstfile.push("testfile");
+    let file = File::open(dstfile);
+    assert!(file.is_ok());
+    let file = file.unwrap();
+    let mut buf_reader = BufReader::new(file);
+    let mut contents = String::new();
+    buf_reader.read_to_string(&mut contents)?;
+    assert_eq!(contents, file_contents2);
+
+    let i = dstdir.generate_index(&mut state1.as_ref().lock().unwrap());
+    assert_eq!(i[0].versions.len(), 2);
+
+    // Sync the file modified in dstdir to srcdir
+    thread::sleep(time::Duration::from_millis(200));
+    connection2.get_directory(&srcdir).await?;
+    let mut dstfile = srcpath.clone();
+    dstfile.push("testfile");
+    let file = File::open(dstfile);
+    assert!(file.is_ok());
+    let file = file.unwrap();
+    let mut buf_reader = BufReader::new(file);
+    let mut contents = String::new();
+    buf_reader.read_to_string(&mut contents)?;
+    assert_eq!(contents, file_contents2);
     connection1.close().await?;
     connection2.close().await?;
     Ok(())

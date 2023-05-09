@@ -78,6 +78,22 @@ impl PeerConnectionInner {
         innerc
     }
 
+    pub async fn directory_updated(&self, directory: String) {
+        let mut synced_index_updated = false;
+        if let Some(peer) = self.get_peer() {
+            let mut state = self.state.lock().unwrap();
+            if let Some(directory) = state.get_sync_directory(&directory) {
+                if state.is_directory_synced(&directory, &peer) {
+                    synced_index_updated = true;
+                }
+            }
+        }
+
+        if synced_index_updated {
+            self.send_index().await;
+        }
+    }
+
     pub async fn send_index(&self) -> io::Result<()> {
         if let Some(peer) = self.get_peer() {
             let directories = self.state.lock().unwrap().get_sync_directories();
@@ -88,7 +104,7 @@ impl PeerConnectionInner {
                 let index = items::Index {
                     folder: dir.id.clone(),
                     files: dir
-                        .generate_index()
+                        .generate_index(&mut self.state.as_ref().lock().unwrap())
                         .iter()
                         .map(|x| items::FileInfo {
                             name: x.get_name(&dir),
@@ -109,7 +125,16 @@ impl PeerConnectionInner {
                             deleted: false,
                             invalid: false,
                             no_permissions: true,
-                            version: None,
+                            version: Some(items::Vector {
+                                counters: x
+                                    .versions
+                                    .iter()
+                                    .map(|x| items::Counter {
+                                        id: x.0,
+                                        value: x.1,
+                                    })
+                                    .collect::<Vec<_>>(),
+                            }),
                             sequence: 1,
                             block_size: x.get_size() as i32,
                             blocks: x
@@ -168,6 +193,7 @@ impl PeerConnectionInner {
         match message {
             PeerRequestResponse::Response(response) => {
                 if response.code != items::ErrorCode::NoError as i32 {
+                    log::error!("Error code when requesting data: {}", response.code);
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
                         "Got an error when requesting data",
@@ -200,18 +226,44 @@ impl PeerConnectionInner {
     pub async fn get_directory(&self, directory: &SyncDirectory) -> io::Result<()> {
         let indexes = self.indexes.lock().unwrap();
         if let Some(index) = indexes.get(&directory.id) {
+            let local_index = directory.generate_index(&mut self.state.as_ref().lock().unwrap());
             for file in &index.files {
+                assert!(file.version.is_some());
+                if let Some(local) = local_index
+                    .iter()
+                    .find(|&x| x.get_name(directory) == file.name)
+                {
+                    let mut remote_version = 0;
+                    let default = items::Vector { counters: vec![] };
+                    for c in file.version.as_ref().unwrap_or(&default).counters.iter() {
+                        if c.value > remote_version {
+                            remote_version = c.value;
+                        }
+                    }
+                    if remote_version <= local.synced_version {
+                        continue;
+                    }
+                }
                 let mut path = directory.path.clone();
                 path.push(file.name.clone());
                 let file = SyncFile {
+                    id: None,
                     path,
                     hash: file.blocks.first().unwrap().hash.clone(),
                     modified_by: 1000,
                     synced_version: 1,
-                    versions: vec![],
+                    versions: file
+                        .version
+                        .as_ref()
+                        .unwrap()
+                        .counters
+                        .iter()
+                        .map(|x| (x.id, x.value))
+                        .collect::<Vec<_>>(),
                 };
                 self.get_file(directory, &file).await?;
             }
+            directory.generate_index(&mut self.state.as_ref().lock().unwrap());
             Ok(())
         } else {
             Err(io::Error::new(
@@ -330,7 +382,7 @@ pub async fn handle_request(
         .state
         .lock()
         .unwrap()
-        .get_sync_directory(request.folder);
+        .get_sync_directory(&request.folder);
 
     let peer = inner.get_peer().unwrap();
 
@@ -341,6 +393,7 @@ pub async fn handle_request(
             .unwrap()
             .is_directory_synced(dir.as_ref().unwrap(), &peer)
     {
+        log::error!("Peer requested file, but it does not exist");
         let response = items::Response {
             id: request.id,
             data: vec![],
@@ -360,6 +413,9 @@ pub async fn handle_request(
 
     let hash = digest::digest(&digest::SHA256, &data);
     let response = if hash.as_ref() != request.hash {
+        log::error!("Request hash: {:?}", request.hash);
+        log::error!("Real hash {:?}", hash.as_ref());
+        log::error!("Peer requested file, but with invalid hash");
         items::Response {
             id: request.id,
             data,
@@ -569,6 +625,14 @@ pub async fn handle_connection(
 
     shutdown_recv.recv().await;
     shutdown_recv.close();
+
+    // Remove from list of listeners
+    inner
+        .state
+        .lock()
+        .unwrap()
+        .listeners
+        .retain(|x| !x.inner.tx.same_channel(&inner.tx));
 
     log::info!("{}: Shutting down server", inner.get_name());
 

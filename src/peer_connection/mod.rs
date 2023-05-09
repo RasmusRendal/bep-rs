@@ -21,6 +21,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 /// to handle the connection, and you can send it commands
 /// Please appreciate the restraint it took to not name it
 /// BeerConnection.
+#[derive(Clone)]
 pub struct PeerConnection {
     /// Pushing things into this channel causes them to be
     /// sent over the tcp connection. See get_file for an
@@ -34,8 +35,10 @@ impl PeerConnection {
         state: Arc<Mutex<BepState>>,
         connector: bool,
     ) -> Self {
-        let inner = PeerConnectionInner::new(state, socket, connector);
-        PeerConnection { inner }
+        let inner = PeerConnectionInner::new(state.clone(), socket, connector);
+        let n = PeerConnection { inner };
+        state.as_ref().lock().unwrap().listeners.push(n.clone());
+        n
     }
 
     async fn submit_request(
@@ -45,6 +48,15 @@ impl PeerConnection {
         msg: Vec<u8>,
     ) -> io::Result<PeerRequestResponse> {
         self.inner.submit_request(id, response_type, msg).await
+    }
+
+    pub fn directory_updated(&mut self, directory: &SyncDirectory) {
+        let n = self.inner.clone();
+        let id = directory.id.clone();
+        tokio::spawn(async move {
+            log::info!("sending");
+            n.directory_updated(id).await;
+        });
     }
 
     /// Sync an entire directory from the peer,

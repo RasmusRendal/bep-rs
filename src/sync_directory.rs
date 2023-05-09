@@ -1,3 +1,4 @@
+use super::bep_state::BepState;
 use ring::digest;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -14,6 +15,7 @@ pub struct SyncBlock {
 /// A file that we should be syncing
 #[derive(Clone)]
 pub struct SyncFile {
+    pub id: Option<i32>,
     pub path: PathBuf,
     pub hash: Vec<u8>,
     pub modified_by: u64,
@@ -29,23 +31,60 @@ pub struct SyncDirectory {
     pub path: PathBuf,
 }
 
+fn comp_hashes(h1: &Vec<u8>, h2: &Vec<u8>) -> bool {
+    if h1.len() != h2.len() {
+        return false;
+    }
+    for i in 0..h1.len() {
+        if h1[i] != h2[i] {
+            return false;
+        }
+    }
+    true
+}
+
 impl SyncDirectory {
-    pub fn generate_index(&self) -> Vec<SyncFile> {
+    pub fn generate_index(&self, state: &mut BepState) -> Vec<SyncFile> {
+        let mut changed = false;
+        let short_id = state.get_short_id();
         let path = self.path.clone();
-        let mut files: Vec<SyncFile> = Vec::new();
+        let mut files = state.get_sync_files(&self.id);
         for file in path.read_dir().unwrap().flatten() {
             let mut buf_reader = BufReader::new(File::open(file.path()).unwrap());
             let mut data = Vec::new();
             buf_reader.read_to_end(&mut data).unwrap();
-
             let hash = digest::digest(&digest::SHA256, &data).as_ref().to_vec();
-            files.push(SyncFile {
-                path: file.path().clone(),
-                hash,
-                modified_by: 1000,
-                synced_version: 1,
-                versions: vec![],
-            });
+
+            match files.iter_mut().find(|x| x.path == file.path()) {
+                Some(index_file) => {
+                    if index_file.versions.last().unwrap().1 == index_file.synced_version
+                        && !comp_hashes(&hash, &index_file.hash)
+                    {
+                        let vnumber = index_file.versions.last().unwrap().1 + 1;
+                        index_file.versions.push((short_id, vnumber));
+                        index_file.hash = hash;
+                        state.update_sync_file(self, index_file);
+                        changed = true;
+                    }
+                }
+                None => {
+                    files.push(SyncFile {
+                        id: None,
+                        path: file.path().clone(),
+                        hash,
+                        modified_by: short_id,
+                        synced_version: 1,
+                        versions: vec![(short_id, 1)],
+                    });
+                    state.update_sync_file(self, files.last().unwrap());
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            for connection in &mut state.listeners {
+                connection.directory_updated(self);
+            }
         }
         files
     }
@@ -93,6 +132,9 @@ mod tests {
 
     #[test]
     fn test_generate_index() {
+        let statedir = tempfile::tempdir().unwrap().into_path();
+        let mut state = BepState::new(statedir);
+
         let file_contents = "hello world";
         let filename = "testfile";
         let hash: Vec<u8> = b"\xb9\x4d\x27\xb9\x93\x4d\x3e\x08\xa5\x2e\x52\xd7\xda\x7d\xab\xfa\xc4\x84\xef\xe3\x7a\x53\x80\xee\x90\x88\xf7\xac\xe2\xef\xcd\xe9".to_vec();
@@ -105,12 +147,9 @@ mod tests {
             o.write_all(file_contents.as_bytes()).unwrap();
         }
 
-        let directory = SyncDirectory {
-            id: "someid".to_string(),
-            label: "dir".to_string(),
-            path,
-        };
-        let mut index = directory.generate_index();
+        let directory = state.add_sync_directory(path.clone(), None);
+
+        let mut index = directory.generate_index(&mut state);
         assert!(index.len() == 1);
         let fileinfo = index.pop().unwrap();
         assert!(fileinfo.path == helloworld);
@@ -129,13 +168,82 @@ mod tests {
         let mut filepath = path.clone();
         filepath.push("somefile");
         let file = SyncFile {
+            id: None,
             path: filepath,
             hash: vec![],
             modified_by: 0,
             synced_version: 0,
-            versions: vec![],
+            versions: vec![(1, 1)],
         };
 
         assert!(file.get_name(&directory) == "somefile");
+    }
+
+    #[test]
+    fn test_update_index() {
+        // Tests that a new version of the file is created in the database,
+        // only when we change the file
+        let _ = env_logger::builder().is_test(true).try_init();
+        let statedir = tempfile::tempdir().unwrap().into_path();
+        let mut state = BepState::new(statedir);
+
+        let file_contents1 = "hello world";
+        let file_contents2 = "some other contents";
+        let filename = "testfile";
+        let hash1: Vec<u8> = b"\xb9\x4d\x27\xb9\x93\x4d\x3e\x08\xa5\x2e\x52\xd7\xda\x7d\xab\xfa\xc4\x84\xef\xe3\x7a\x53\x80\xee\x90\x88\xf7\xac\xe2\xef\xcd\xe9".to_vec();
+        let hash2: Vec<u8> = b"\xb9\x59\x57\xc2\x9f\xf5\xe0\xea\xb4\x0c\x20\xcb\xc4\x41\xe8\x6d\x81\xb5\xad\x1a\x59\x19\x99\x36\x7b\xa1\x8c\x9b\x4d\xa7\xab\xae".to_vec();
+
+        let path = tempfile::tempdir().unwrap().into_path();
+        let mut helloworld = path.clone();
+        helloworld.push(filename);
+        {
+            let mut o = File::create(helloworld.clone()).unwrap();
+            o.write_all(file_contents1.as_bytes()).unwrap();
+        }
+
+        let directory = state.add_sync_directory(path.clone(), None);
+
+        let mut index = directory.generate_index(&mut state);
+        assert!(index.len() == 1);
+        let mut fileinfo = index.pop().unwrap();
+        assert!(fileinfo.path == helloworld);
+        assert!(fileinfo.hash == hash1);
+        assert!(fileinfo.versions.len() == 1);
+        let fileversion = fileinfo.versions.pop().unwrap();
+        assert!(fileversion.0 == state.get_short_id());
+        assert!(fileversion.1 == 1);
+        log::info!("Successfully generated first index");
+
+        let mut index = directory.generate_index(&mut state);
+        assert!(index.len() == 1);
+        let mut fileinfo = index.pop().unwrap();
+        assert!(fileinfo.path == helloworld);
+        assert!(fileinfo.hash == hash1);
+        assert!(fileinfo.versions.len() == 1);
+        let fileversion = fileinfo.versions.pop().unwrap();
+        assert!(fileversion.0 == state.get_short_id());
+        assert!(fileversion.1 == 1);
+        log::info!("Successfully generated second index");
+
+        {
+            let mut o = File::create(helloworld.clone()).unwrap();
+            o.write_all(file_contents2.as_bytes()).unwrap();
+        }
+
+        let mut index = directory.generate_index(&mut state);
+        assert!(index.len() == 1);
+        let mut fileinfo = index.pop().unwrap();
+        assert!(fileinfo.path == helloworld);
+        assert_eq!(fileinfo.hash, hash2);
+
+        assert!(fileinfo.versions.len() == 2);
+        let fileversion = fileinfo.versions.pop().unwrap();
+        assert!(fileversion.0 == state.get_short_id());
+        assert!(fileversion.1 == 2);
+        let fileversion = fileinfo.versions.pop().unwrap();
+        assert!(fileversion.0 == state.get_short_id());
+        assert!(fileversion.1 == 1);
+
+        log::info!("Successfully generated third index");
     }
 }
