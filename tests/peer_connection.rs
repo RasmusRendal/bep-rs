@@ -20,19 +20,19 @@ async fn test_open_close() -> io::Result<()> {
     state2
         .lock()
         .unwrap()
-        .add_peer("con1".to_string(), state1.lock().unwrap().get_id());
+        .add_peer("strange_name".to_string(), state1.lock().unwrap().get_id());
     state1
         .lock()
         .unwrap()
-        .add_peer("con2".to_string(), state2.lock().unwrap().get_id());
+        .add_peer("stranger_name".to_string(), state2.lock().unwrap().get_id());
 
     let (client, server) = tokio::io::duplex(64);
     let mut connection1 = PeerConnection::new(client, state1, false);
     let mut connection2 = PeerConnection::new(server, state2, true);
     connection1.close().await.unwrap();
     connection2.close().await.unwrap();
-    assert!(connection1.get_peer_name().unwrap() == "con2".to_string());
-    assert!(connection2.get_peer_name().unwrap() == "con1".to_string());
+    assert!(connection1.get_peer_name().unwrap() == "stranger_name".to_string());
+    assert!(connection2.get_peer_name().unwrap() == "strange_name".to_string());
     Ok(())
 }
 
