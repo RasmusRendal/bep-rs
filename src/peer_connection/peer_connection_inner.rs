@@ -336,7 +336,6 @@ impl PeerConnectionInner {
 
     /// Get the peer this connection is to
     pub fn get_peer(&self) -> Option<Peer> {
-        // TODO: Authenticate peers
         let peers = self.state.lock().unwrap().get_peers();
         let name = self
             .hello

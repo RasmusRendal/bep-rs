@@ -295,6 +295,15 @@ impl BepState {
         self.get_sync_directory(&folder_id).unwrap()
     }
 
+    pub fn add_peer_vec_id(&mut self, peer_name: String, peer_id: Vec<u8>) -> Peer {
+        let boxed_slice = peer_id.into_boxed_slice();
+        let boxed_array: Box<[u8; 32]> = match boxed_slice.try_into() {
+            Ok(ba) => ba,
+            Err(o) => panic!("Expected a Vec of length {} but it was {}", 4, o.len()),
+        };
+        self.add_peer(peer_name, *boxed_array)
+    }
+
     pub fn add_peer(&mut self, peer_name: String, peer_id: [u8; 32]) -> Peer {
         use crate::schema::peers;
         use crate::schema::peers::dsl::*;
