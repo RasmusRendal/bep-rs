@@ -97,6 +97,12 @@ impl PeerConnection {
         }
     }
 
+    /// Wait for the connection to close in some other way
+    pub async fn wait_for_close(&mut self) -> tokio::io::Result<()> {
+        self.inner.wait_for_close().await?;
+        Ok(())
+    }
+
     pub fn get_peer_name(&self) -> Option<String> {
         self.inner.get_peer().map(|x| x.name)
     }
