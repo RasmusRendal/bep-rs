@@ -5,7 +5,7 @@ pipeline:
       - rustup component add rustfmt
       - find src -type f -name '*.rs' | xargs rustfmt --edition 2021 --check
   build:
-    image: rust:1.69
+    image: rust:1.69-bookworm
     commands:
       - apt-get update
       - apt-get install -y protobuf-compiler
