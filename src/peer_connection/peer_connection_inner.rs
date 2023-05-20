@@ -24,6 +24,7 @@ pub enum PeerRequestResponseType {
     None,
     WhenSent,
     WhenResponse,
+    WhenClosed,
 }
 
 pub enum PeerRequestResponse {
@@ -230,6 +231,7 @@ impl PeerConnectionInner {
     }
 
     pub async fn get_directory(&self, directory: &SyncDirectory) -> io::Result<()> {
+        log::info!("{}: Syncing directory {}", self.get_name(), directory.label);
         let index = directory.generate_index(&mut self.state.as_ref().lock().unwrap());
 
         for file in &index {
@@ -238,6 +240,7 @@ impl PeerConnectionInner {
             }
         }
         directory.generate_index(&mut self.state.as_ref().lock().unwrap());
+        log::info!("{}: Syncing complete", self.get_name());
         Ok(())
     }
 
@@ -318,6 +321,25 @@ impl PeerConnectionInner {
             .find(|peer| &peer_id == peer.device_id.as_ref().unwrap())
     }
 
+    pub async fn wait_for_close(&mut self) -> io::Result<()> {
+        if self.shutdown_send.is_closed() || self.tx.is_closed() {
+            log::info!("already shut");
+            return Ok(());
+        }
+        let (tx, rx) = oneshot::channel();
+        let id = StdRng::from_entropy().sample(Standard);
+        self.requests.write().unwrap().insert(
+            id,
+            PeerRequestListener {
+                id,
+                response_type: PeerRequestResponseType::WhenClosed,
+                inner: tx,
+            },
+        );
+        rx.await;
+        Ok(())
+    }
+
     pub async fn close(&mut self) -> io::Result<PeerRequestResponse> {
         log::info!("submitted close");
         if self.shutdown_send.is_closed() || self.tx.is_closed() {
@@ -340,10 +362,9 @@ impl PeerConnectionInner {
 /// Call this function when the client has indicated it want to send a Request
 /// At the moment, it always responds with a hardcoded file
 pub async fn handle_request(
-    stream: &mut ReadHalf<impl AsyncRead>,
+    request: items::Request,
     inner: PeerConnectionInner,
 ) -> tokio::io::Result<()> {
-    let request = receive_message!(items::Request, stream)?;
     log::info!("{}: Received request {:?}", inner.get_name(), request);
 
     let dir = inner
@@ -429,6 +450,7 @@ async fn handle_response(
 }
 
 async fn handle_index(index: items::Index, inner: PeerConnectionInner) -> tokio::io::Result<()> {
+    log::info!("{}: Handling index", inner.get_name());
     let syncdir = inner
         .state
         .lock()
@@ -489,9 +511,8 @@ async fn handle_index(index: items::Index, inner: PeerConnectionInner) -> tokio:
             updated = true;
         }
     }
-    if updated {
-        inner.get_directory(&syncdir).await?;
-    }
+    log::info!("{}: Index merged", inner.get_name());
+    inner.get_directory(&syncdir).await?;
 
     Ok(())
 }
@@ -502,7 +523,7 @@ async fn handle_reading(
     inner: PeerConnectionInner,
 ) -> tokio::io::Result<()> {
     loop {
-        let header_len = tokio::time::timeout(Duration::from_millis(1000 * 3), stream.read_u16())
+        let header_len = tokio::time::timeout(Duration::from_millis(1000 * 30), stream.read_u16())
             .await?? as usize;
         let mut header = vec![0u8; header_len];
         stream.read_exact(&mut header).await?;
@@ -516,7 +537,12 @@ async fn handle_reading(
         if header.r#type == items::MessageType::Request as i32 {
             log::info!("{}: Handling request", inner.get_name());
             let innerclone = inner.clone();
-            handle_request(stream, innerclone).await?;
+            let request = receive_message!(items::Request, stream)?;
+            tokio::spawn(async move {
+                if let Err(e) = handle_request(request, innerclone).await {
+                    log::error!("Received an error when handling request: {}", e);
+                }
+            });
         } else if header.r#type == items::MessageType::Index as i32 {
             let index = receive_message!(items::Index, stream)?;
             let innerc = inner.clone();
