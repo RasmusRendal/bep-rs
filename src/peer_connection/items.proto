@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package beercanlib.items;
+package bep_rs.items;
 
 message Request {
     int32  id             = 1;

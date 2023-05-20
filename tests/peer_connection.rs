@@ -1,6 +1,6 @@
-use beercanlib::bep_state::BepState;
-use beercanlib::peer_connection::*;
-use beercanlib::sync_directory::SyncFile;
+use bep_rs::bep_state::BepState;
+use bep_rs::peer_connection::*;
+use bep_rs::sync_directory::SyncFile;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
