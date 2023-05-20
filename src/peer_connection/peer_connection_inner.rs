@@ -13,7 +13,7 @@ use ring::digest;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -43,12 +43,12 @@ pub struct PeerRequestListener {
 #[derive(Clone)]
 pub struct PeerConnectionInner {
     state: Arc<Mutex<BepState>>,
-    indexes: Arc<Mutex<HashMap<String, items::Index>>>,
     // Handles for pending requests that need to be answered
-    requests: Arc<Mutex<HashMap<i32, PeerRequestListener>>>,
+    requests: Arc<RwLock<HashMap<i32, PeerRequestListener>>>,
     tx: Sender<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>,
     shutdown_send: UnboundedSender<()>,
-    peer_id: Arc<Mutex<Vec<u8>>>,
+    peer_id: Arc<RwLock<Vec<u8>>>,
+    name: Arc<RwLock<String>>,
 }
 
 impl PeerConnectionInner {
@@ -61,11 +61,11 @@ impl PeerConnectionInner {
         let (shutdown_send, shutdown_recv) = tokio::sync::mpsc::unbounded_channel::<()>();
         let inner = PeerConnectionInner {
             state,
-            indexes: Arc::new(Mutex::new(HashMap::new())),
-            requests: Arc::new(Mutex::new(HashMap::new())),
+            requests: Arc::new(RwLock::new(HashMap::new())),
             tx,
             shutdown_send,
-            peer_id: Arc::new(Mutex::new(vec![])),
+            peer_id: Arc::new(RwLock::new(vec![])),
+            name: Arc::new(RwLock::new("".to_string())),
         };
         let innerc = inner.clone();
         tokio::spawn(async move {
@@ -212,6 +212,12 @@ impl PeerConnectionInner {
                 log::info!("Writing to path {:?}", file);
                 let mut o = File::create(file)?;
                 o.write_all(response.data.as_slice())?;
+                let mut sync_file = sync_file.to_owned();
+                sync_file.synced_version = sync_file.get_index_version();
+                self.state
+                    .lock()
+                    .unwrap()
+                    .update_sync_file(directory, &sync_file);
             }
             _ => {
                 return Err(io::Error::new(
@@ -224,57 +230,22 @@ impl PeerConnectionInner {
     }
 
     pub async fn get_directory(&self, directory: &SyncDirectory) -> io::Result<()> {
-        let indexes = self.indexes.lock().unwrap();
-        if let Some(index) = indexes.get(&directory.id) {
-            let local_index = directory.generate_index(&mut self.state.as_ref().lock().unwrap());
-            for file in &index.files {
-                assert!(file.version.is_some());
-                if let Some(local) = local_index
-                    .iter()
-                    .find(|&x| x.get_name(directory) == file.name)
-                {
-                    let mut remote_version = 0;
-                    let default = items::Vector { counters: vec![] };
-                    for c in file.version.as_ref().unwrap_or(&default).counters.iter() {
-                        if c.value > remote_version {
-                            remote_version = c.value;
-                        }
-                    }
-                    if remote_version <= local.synced_version {
-                        continue;
-                    }
-                }
-                let mut path = directory.path.clone();
-                path.push(file.name.clone());
-                let file = SyncFile {
-                    id: None,
-                    path,
-                    hash: file.blocks.first().unwrap().hash.clone(),
-                    modified_by: 1000,
-                    synced_version: 1,
-                    versions: file
-                        .version
-                        .as_ref()
-                        .unwrap()
-                        .counters
-                        .iter()
-                        .map(|x| (x.id, x.value))
-                        .collect::<Vec<_>>(),
-                };
-                self.get_file(directory, &file).await?;
+        let index = directory.generate_index(&mut self.state.as_ref().lock().unwrap());
+
+        for file in &index {
+            if file.synced_version < file.get_index_version() {
+                self.get_file(directory, file).await?;
             }
-            directory.generate_index(&mut self.state.as_ref().lock().unwrap());
-            Ok(())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Cannot request directory. Still waiting for index.",
-            ))
         }
+        directory.generate_index(&mut self.state.as_ref().lock().unwrap());
+        Ok(())
     }
 
     pub fn get_name(&self) -> String {
-        self.state.lock().unwrap().get_name()
+        if self.name.read().unwrap().is_empty() {
+            *self.name.write().unwrap() = self.state.lock().unwrap().get_name();
+        }
+        self.name.read().unwrap().clone()
     }
 
     pub async fn submit_message(&self, msg: Vec<u8>) {
@@ -307,9 +278,8 @@ impl PeerConnectionInner {
                 response_type,
                 inner: tx,
             };
-            self.requests.lock().unwrap().insert(id, request);
+            self.requests.write().unwrap().insert(id, request);
         };
-
         let r = self.tx.send((first_part, msg)).await;
         if let Err(e) = r {
             log::error!(
@@ -335,13 +305,13 @@ impl PeerConnectionInner {
     }
 
     fn set_peer(&self, id: Vec<u8>) {
-        *self.peer_id.lock().unwrap() = id;
+        *self.peer_id.write().unwrap() = id;
     }
 
     /// Get the peer this connection is to
     pub fn get_peer(&self) -> Option<Peer> {
         let peers = self.state.lock().unwrap().get_peers();
-        let peer_id = self.peer_id.as_ref().lock().unwrap().clone();
+        let peer_id = self.peer_id.as_ref().read().unwrap().clone();
         // TODO: Check properly
         peers
             .into_iter()
@@ -443,7 +413,7 @@ async fn handle_response(
         inner.get_name(),
         response.id
     );
-    if let Some(peer_request) = inner.requests.lock().unwrap().remove(&response.id) {
+    if let Some(peer_request) = inner.requests.write().unwrap().remove(&response.id) {
         assert!(peer_request.response_type == PeerRequestResponseType::WhenResponse);
         let r = peer_request
             .inner
@@ -459,11 +429,70 @@ async fn handle_response(
 }
 
 async fn handle_index(index: items::Index, inner: PeerConnectionInner) -> tokio::io::Result<()> {
-    inner
-        .indexes
+    let syncdir = inner
+        .state
         .lock()
         .unwrap()
-        .insert(index.folder.clone(), index);
+        .get_sync_directory(&index.folder)
+        .unwrap();
+    let mut localindex = syncdir.generate_index(&mut inner.state.as_ref().lock().unwrap());
+    let mut updated = false;
+    for file in index.files {
+        log::info!("{}: Handling index file {}", inner.get_name(), file.name);
+        let localfile = localindex
+            .iter_mut()
+            .find(|x| x.get_name(&syncdir) == file.name);
+        if localfile.is_some() {
+            let localfile: &mut SyncFile = localfile.unwrap();
+            if localfile.versions.len() >= file.version.as_ref().unwrap().counters.len() {
+                continue;
+            }
+            log::info!("{}: Updating file {}", inner.get_name(), file.name);
+            localfile.versions = file
+                .version
+                .unwrap()
+                .counters
+                .into_iter()
+                .map(|x| (x.id, x.value))
+                .collect();
+            localfile.hash = file.blocks[0].hash.clone();
+            localfile.modified_by = file.modified_by;
+            inner
+                .state
+                .lock()
+                .unwrap()
+                .update_sync_file(&syncdir, &localfile);
+            updated = true;
+        } else {
+            log::info!("{}: New file {}", inner.get_name(), file.name);
+            let mut path = syncdir.path.clone();
+            path.push(file.name.clone());
+            let syncfile = SyncFile {
+                id: None,
+                path,
+                hash: file.blocks[0].hash.clone(),
+                modified_by: file.modified_by,
+                synced_version: 0,
+                versions: file
+                    .version
+                    .unwrap()
+                    .counters
+                    .into_iter()
+                    .map(|x| (x.id, x.value))
+                    .collect(),
+            };
+            inner
+                .state
+                .lock()
+                .unwrap()
+                .update_sync_file(&syncdir, &syncfile);
+            updated = true;
+        }
+    }
+    if updated {
+        inner.get_directory(&syncdir).await?;
+    }
+
     Ok(())
 }
 
@@ -490,7 +519,12 @@ async fn handle_reading(
             handle_request(stream, innerclone).await?;
         } else if header.r#type == items::MessageType::Index as i32 {
             let index = receive_message!(items::Index, stream)?;
-            handle_index(index, inner.clone()).await?;
+            let innerc = inner.clone();
+            tokio::spawn(async move {
+                if let Err(e) = handle_index(index, innerc).await {
+                    log::error!("Received an error when handling index: {}", e);
+                }
+            });
         } else if header.r#type == items::MessageType::Response as i32 {
             let innerclone = inner.clone();
             handle_response(stream, innerclone).await?;
@@ -531,11 +565,11 @@ async fn handle_writing(
     mut rx: Receiver<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>,
 ) -> tokio::io::Result<()> {
     while let Some((tx, msg)) = rx.recv().await {
-        log::info!("{}: Wrote message", inner.get_name());
         if let Err(e) = wr.write_all(&msg).await {
             close_receiver(rx).await;
             return Err(e);
         }
+        log::info!("{}: Wrote message", inner.get_name());
         if let Some(tx) = tx {
             let r = tx.send(PeerRequestResponse::Sent);
             if let Err(_e) = r {
@@ -594,7 +628,7 @@ pub async fn handle_connection(
     let sendclone = inner.shutdown_send.clone();
     let innerclone = inner.clone();
     tokio::spawn(async move {
-        let r = handle_reading(&mut rd, innerclone).await;
+        let r = handle_reading(&mut rd, innerclone.clone()).await;
         if let Err(e) = &r {
             log::error!("{}: Got error from reader: {}", name, e);
         }
@@ -628,13 +662,13 @@ pub async fn handle_connection(
     log::info!("{}: Shutting down server", inner.get_name());
 
     {
-        let mut requests = inner.requests.lock().unwrap();
+        let mut requests = inner.requests.write().unwrap();
         for (_key, channel) in requests.drain() {
             let s = channel.inner.send(PeerRequestResponse::Closed);
             assert!(s.is_ok());
         }
     }
-    assert!(inner.requests.lock().unwrap().is_empty());
+    assert!(inner.requests.read().unwrap().is_empty());
     log::info!("Responded to all unhandled requests");
 
     Ok(())

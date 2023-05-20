@@ -38,7 +38,7 @@ diesel::table! {
         id -> Nullable<Integer>,
         version_id -> BigInt,
         user_id -> BigInt,
-        sync_file_id -> Nullable<Integer>,
+        sync_file_id -> Integer,
     }
 }
 

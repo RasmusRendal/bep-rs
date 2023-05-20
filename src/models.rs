@@ -59,5 +59,5 @@ pub struct SyncFileVersion {
     pub id: Option<i32>,
     pub version_id: i64,
     pub user_id: i64,
-    pub sync_file_id: Option<i32>,
+    pub sync_file_id: i32,
 }

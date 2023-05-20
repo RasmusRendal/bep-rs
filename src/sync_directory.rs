@@ -57,10 +57,12 @@ impl SyncDirectory {
 
             match files.iter_mut().find(|x| x.path == file.path()) {
                 Some(index_file) => {
+                    assert!(!index_file.versions.is_empty());
                     if index_file.versions.last().unwrap().1 == index_file.synced_version
                         && !comp_hashes(&hash, &index_file.hash)
                     {
                         let vnumber = index_file.versions.last().unwrap().1 + 1;
+                        index_file.synced_version = vnumber;
                         index_file.versions.push((short_id, vnumber));
                         index_file.hash = hash;
                         state.update_sync_file(self, index_file);
@@ -81,6 +83,11 @@ impl SyncDirectory {
                 }
             }
         }
+
+        for file in &files {
+            assert!(!file.versions.is_empty());
+        }
+
         if changed {
             for connection in &mut state.listeners {
                 connection.directory_updated(self);
@@ -104,6 +111,13 @@ impl SyncFile {
             hash: self.hash.clone(),
         };
         vec![block]
+    }
+
+    pub fn get_index_version(&self) -> u64 {
+        match self.versions.last() {
+            Some(v) => v.1,
+            None => 1,
+        }
     }
 
     pub fn get_size(&self) -> u64 {

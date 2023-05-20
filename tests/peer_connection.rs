@@ -266,8 +266,8 @@ async fn test_get_directory() -> io::Result<()> {
 
     // Wait for the index to be received
     // TODO: Introduce a call that lets us wait until the connection is set up
+    log::info!("Waiting for testfile");
     thread::sleep(time::Duration::from_millis(200));
-    connection1.get_directory(&dstdir).await?;
 
     let mut dstfile = dstpath.clone();
     dstfile.push("testfile");
@@ -373,9 +373,9 @@ async fn test_update_file() -> io::Result<()> {
     assert!(file.is_ok());
     let file = file.unwrap();
     let mut buf_reader = BufReader::new(file);
-    let mut contents = String::new();
-    buf_reader.read_to_string(&mut contents)?;
-    assert_eq!(contents, file_contents2);
+    let mut actual_contents = String::new();
+    buf_reader.read_to_string(&mut actual_contents)?;
+    assert_eq!(actual_contents, file_contents2);
 
     let i = dstdir.generate_index(&mut state1.as_ref().lock().unwrap());
     assert_eq!(i[0].versions.len(), 2);

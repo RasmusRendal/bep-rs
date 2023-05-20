@@ -100,11 +100,10 @@ impl BepState {
 
     fn get_versions(&mut self, id: i32) -> Vec<(u64, u64)> {
         use super::schema::sync_file_versions;
-        //TODO: Something about this terrible hack with i64/u64 and diesel
         sync_file_versions::dsl::sync_file_versions
             .filter(sync_file_versions::dsl::sync_file_id.eq(id))
             .load::<SyncFileVersion>(&mut self.connection)
-            .unwrap_or_default()
+            .unwrap()
             .iter()
             .map(|x| (from_i64(x.user_id), from_i64(x.version_id)))
             .collect::<Vec<(u64, u64)>>()
@@ -121,14 +120,16 @@ impl BepState {
             .map(|x| {
                 let mut path = dir.path.clone();
                 path.push(x.name.clone());
-                sync_directory::SyncFile {
+                let dir = sync_directory::SyncFile {
                     id: x.id,
                     path,
                     hash: x.hash.as_ref().unwrap().clone(),
                     modified_by: from_i64(x.modified_by),
                     synced_version: from_i64(x.synced_version_id),
                     versions: self.get_versions(x.id.unwrap()),
-                }
+                };
+                assert!(!dir.versions.is_empty());
+                dir
             })
             .collect::<Vec<_>>()
     }
@@ -150,35 +151,43 @@ impl BepState {
             hash: Some(file.hash.clone()),
             folder_id: dir.id.clone(),
         };
-        let inserted = diesel::insert_into(sync_files::table)
+        let inserted: Vec<SyncFile> = diesel::insert_into(sync_files::table)
             .values(sync_file.clone())
             .on_conflict(sync_files::dsl::id)
             .do_update()
             .set(sync_file)
-            .execute(&mut self.connection)
+            .get_results(&mut self.connection)
             .unwrap();
+
+        let inserted = inserted.first().unwrap().id.unwrap();
 
         let versions = sync_file_versions::dsl::sync_file_versions
-            .filter(sync_file_versions::dsl::sync_file_id.eq(file.id))
+            .filter(sync_file_versions::dsl::sync_file_id.eq(inserted))
             .order_by(sync_file_versions::dsl::id.asc())
             .load::<SyncFileVersion>(&mut self.connection)
-            .unwrap_or_default()
+            .unwrap()
             .len();
 
-        let versions_to_insert = file.versions.as_slice()[versions..]
-            .iter()
-            .map(|x| SyncFileVersion {
-                id: None,
-                version_id: from_u64(x.1),
-                user_id: from_u64(x.0),
-                sync_file_id: Some(inserted as i32),
-            })
-            .collect::<Vec<_>>();
+        // We shouldn't have more versions than the file being requested
+        assert!(versions <= file.versions.len());
 
-        diesel::insert_into(sync_file_versions::table)
-            .values(versions_to_insert)
-            .execute(&mut self.connection)
-            .unwrap();
+        if versions < file.versions.len() {
+            let versions_to_insert = file.versions.as_slice()[versions..]
+                .iter()
+                .map(|x| SyncFileVersion {
+                    id: None,
+                    version_id: from_u64(x.1),
+                    user_id: from_u64(x.0),
+                    sync_file_id: inserted,
+                })
+                .collect::<Vec<_>>();
+
+            diesel::insert_into(sync_file_versions::table)
+                .values(versions_to_insert)
+                .execute(&mut self.connection)
+                .unwrap();
+        }
+        assert!(!self.get_versions(inserted).is_empty());
     }
 
     fn get_options(&mut self) -> Option<DeviceOption> {

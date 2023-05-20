@@ -16,7 +16,6 @@ pub struct Daemon {
 
 /// Try and connect to the server at addr
 async fn connect_to_server(state: Arc<Mutex<BepState>>, addr: String) -> io::Result<()> {
-    // TODO: Add a wait-for-close
     log::info!(target: "Daemon", "");
     log::info!(target: "Daemon", "Connecting to {addr}");
 
