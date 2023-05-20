@@ -1,6 +1,6 @@
 use log;
 use ring::digest;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::timeout;
@@ -13,34 +13,45 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_millis(2000);
 
 pub struct BepVerifier {
     names: Vec<DistinguishedName>,
-    peer_id: Vec<u8>,
+    peer_ids: Vec<Vec<u8>>,
+    verified_id: Arc<Mutex<Vec<u8>>>,
+}
+
+fn compare_arrays(arr1: &[u8], arr2: &Vec<u8>) -> bool {
+    if arr2.len() != arr1.len() {
+        log::error!(
+            "Expected len {} certificate, got {}",
+            arr2.len(),
+            arr1.len()
+        );
+        return false;
+    }
+    for i in 0..arr1.len() {
+        if arr2.get(i).unwrap() != arr1.get(i).unwrap() {
+            return false;
+        }
+    }
+    true
 }
 
 impl BepVerifier {
-    pub fn new(peer_id: Vec<u8>) -> Self {
-        assert!(peer_id.len() == 32);
+    pub fn new(peer_ids: Vec<Vec<u8>>, verified_id: Arc<Mutex<Vec<u8>>>) -> Self {
         BepVerifier {
             names: vec![],
-            peer_id,
+            peer_ids,
+            verified_id,
         }
     }
 
     pub fn check_cert(&self, cert: &Certificate) -> bool {
         let hash = digest::digest(&digest::SHA256, &cert.0);
-        if self.peer_id.len() != hash.as_ref().len() {
-            log::error!(
-                "Expected len {} certificate, got {}",
-                self.peer_id.len(),
-                hash.as_ref().len()
-            );
-            return false;
-        }
-        for i in 0..self.peer_id.len() {
-            if self.peer_id.get(i).unwrap() != hash.as_ref().get(i).unwrap() {
-                return false;
+        for peer_id in &self.peer_ids {
+            if compare_arrays(hash.as_ref(), &peer_id) {
+                *self.verified_id.lock().unwrap() = peer_id.clone();
+                return true;
             }
         }
-        true
+        false
     }
 }
 
@@ -85,10 +96,11 @@ pub async fn verify_connection(
     stream: (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
     certificate: Certificate,
     key: PrivateKey,
-    peer_id: Vec<u8>,
+    peer_ids: Vec<Vec<u8>>,
     connector: bool,
-) -> tokio::io::Result<TlsStream<impl AsyncWrite + AsyncRead>> {
-    let verifier = Arc::new(BepVerifier::new(peer_id));
+) -> tokio::io::Result<(TlsStream<impl AsyncWrite + AsyncRead>, Vec<u8>)> {
+    let accepted_peer = Arc::new(Mutex::new(vec![]));
+    let verifier = Arc::new(BepVerifier::new(peer_ids, accepted_peer.clone()));
     if connector {
         let config = tokio_rustls::rustls::ClientConfig::builder()
             .with_safe_defaults()
@@ -107,7 +119,10 @@ pub async fn verify_connection(
             ),
         )
         .await?;
-        Ok(clientstream?.try_into().unwrap())
+        Ok((
+            clientstream?.try_into().unwrap(),
+            accepted_peer.lock().unwrap().clone(),
+        ))
     } else {
         let config = tokio_rustls::rustls::ServerConfig::builder()
             .with_safe_defaults()
@@ -121,7 +136,10 @@ pub async fn verify_connection(
             tokio_rustls::TlsAcceptor::accept(&acceptor, stream),
         )
         .await?;
-        Ok(serverstream?.try_into().unwrap())
+        Ok((
+            serverstream?.try_into().unwrap(),
+            accepted_peer.lock().unwrap().clone(),
+        ))
     }
 }
 
@@ -146,8 +164,8 @@ mod tests {
         let hash2 = digest::digest(&digest::SHA256, &cert2.0).as_ref().to_vec();
 
         let (client, server) = tokio::io::duplex(8192);
-        let v1 = tokio::spawn(verify_connection(client, cert1, key1, hash2, true));
-        let v2 = tokio::spawn(verify_connection(server, cert2, key2, hash1, false));
+        let v1 = tokio::spawn(verify_connection(client, cert1, key1, vec![hash2], true));
+        let v2 = tokio::spawn(verify_connection(server, cert2, key2, vec![hash1], false));
         let (r1, r2) = tokio::join!(v1, v2);
         r1.unwrap().unwrap();
         r2.unwrap().unwrap();
@@ -169,8 +187,14 @@ mod tests {
         let hash2 = digest::digest(&digest::SHA256, &cert2.0).as_ref().to_vec();
 
         let (client, server) = tokio::io::duplex(8192);
-        let v1 = tokio::spawn(verify_connection(client, cert1, key1, hash2.clone(), true));
-        let v2 = tokio::spawn(verify_connection(server, cert2, key2, hash2, false));
+        let v1 = tokio::spawn(verify_connection(
+            client,
+            cert1,
+            key1,
+            vec![hash2.clone()],
+            true,
+        ));
+        let v2 = tokio::spawn(verify_connection(server, cert2, key2, vec![hash2], false));
         let (_, r2) = tokio::join!(v1, v2);
         assert!(r2.unwrap().is_err());
     }
@@ -191,8 +215,14 @@ mod tests {
         let key2 = tokio_rustls::rustls::PrivateKey(gencert2.serialize_private_key_der());
 
         let (client, server) = tokio::io::duplex(8192);
-        let v1 = tokio::spawn(verify_connection(client, cert1, key1, hash1.clone(), true));
-        let v2 = tokio::spawn(verify_connection(server, cert2, key2, hash1, false));
+        let v1 = tokio::spawn(verify_connection(
+            client,
+            cert1,
+            key1,
+            vec![hash1.clone()],
+            true,
+        ));
+        let v2 = tokio::spawn(verify_connection(server, cert2, key2, vec![hash1], false));
         let (r1, _) = tokio::join!(v1, v2);
         assert!(r1.unwrap().is_err());
     }

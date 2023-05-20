@@ -46,9 +46,9 @@ pub struct PeerConnectionInner {
     indexes: Arc<Mutex<HashMap<String, items::Index>>>,
     // Handles for pending requests that need to be answered
     requests: Arc<Mutex<HashMap<i32, PeerRequestListener>>>,
-    hello: Arc<Mutex<Option<items::Hello>>>,
     tx: Sender<(Option<oneshot::Sender<PeerRequestResponse>>, Vec<u8>)>,
     shutdown_send: UnboundedSender<()>,
+    peer_id: Arc<Mutex<Vec<u8>>>,
 }
 
 impl PeerConnectionInner {
@@ -63,9 +63,9 @@ impl PeerConnectionInner {
             state,
             indexes: Arc::new(Mutex::new(HashMap::new())),
             requests: Arc::new(Mutex::new(HashMap::new())),
-            hello: Arc::new(Mutex::new(None)),
             tx,
             shutdown_send,
+            peer_id: Arc::new(Mutex::new(vec![])),
         };
         let innerc = inner.clone();
         tokio::spawn(async move {
@@ -334,20 +334,18 @@ impl PeerConnectionInner {
         }
     }
 
+    fn set_peer(&self, id: Vec<u8>) {
+        *self.peer_id.lock().unwrap() = id;
+    }
+
     /// Get the peer this connection is to
     pub fn get_peer(&self) -> Option<Peer> {
-        // TODO: Authenticate peers
         let peers = self.state.lock().unwrap().get_peers();
-        let name = self
-            .hello
-            .as_ref()
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .device_name
-            .clone();
-        peers.into_iter().find(|peer| name == peer.name)
+        let peer_id = self.peer_id.as_ref().lock().unwrap().clone();
+        // TODO: Check properly
+        peers
+            .into_iter()
+            .find(|peer| &peer_id == peer.device_id.as_ref().unwrap())
     }
 
     pub async fn close(&mut self) -> io::Result<PeerRequestResponse> {
@@ -559,16 +557,6 @@ pub async fn handle_hello(
         inner.get_name(),
         hello.client_name
     );
-    *inner.hello.lock().unwrap() = Some(hello);
-    if inner.get_peer().is_none() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!(
-                "Cannot connect to non-peered device {}",
-                inner.hello.lock().unwrap().as_ref().unwrap().device_name
-            ),
-        ));
-    }
     Ok(())
 }
 
@@ -584,18 +572,21 @@ pub async fn handle_connection(
 ) -> tokio::io::Result<()> {
     handle_hello(&mut stream, &inner).await?;
 
-    let peer = inner.get_peer();
-    if peer.is_none() {
-        return Err(io::Error::new(io::ErrorKind::Other, "Unknown peer"));
-    }
-    let peer = peer.unwrap();
-
-    let peerid = peer.device_id.unwrap();
+    let peerids = inner
+        .state
+        .lock()
+        .unwrap()
+        .get_peers()
+        .into_iter()
+        .map(|x| x.device_id.unwrap_or(vec![]).clone())
+        .collect();
     let certificate =
         tokio_rustls::rustls::Certificate(inner.state.lock().unwrap().get_certificate());
     let key = tokio_rustls::rustls::PrivateKey(inner.state.lock().unwrap().get_key());
 
-    let tcpstream = verify_connection(stream, certificate, key, peerid, connector).await?;
+    let (tcpstream, peer_id) =
+        verify_connection(stream, certificate, key, peerids, connector).await?;
+    inner.set_peer(peer_id);
     let (mut rd, wr) = tokio::io::split(tcpstream);
     inner.send_index().await?;
 
