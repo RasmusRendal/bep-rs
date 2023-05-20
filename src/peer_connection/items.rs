@@ -2,7 +2,7 @@ use prost::Message;
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-include!(concat!(env!("OUT_DIR"), "/beercanlib.items.rs"));
+include!(concat!(env!("OUT_DIR"), "/bep_rs.items.rs"));
 
 const HELLO_MAGIC: u32 = 0x2EA7D90B_u32;
 
