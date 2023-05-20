@@ -50,6 +50,6 @@ CREATE TABLE sync_file_versions (
     id INTEGER PRIMARY KEY,
     version_id BIGINT NOT NULL,
     user_id BIGINT NOT NULL,
-    sync_file_id INTEGER,
+    sync_file_id INTEGER NOT NULL,
     FOREIGN KEY (sync_file_id) REFERENCES sync_files(id)
 );
