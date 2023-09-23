@@ -36,7 +36,7 @@ impl Daemon {
     ///
     /// Currently, the daemon simply tries to connect to every peer,
     /// as defined by the client state, in a loop
-    pub fn run(&mut self) -> Result<i32, Box<dyn Error>> {
+    pub async fn run(&mut self) -> Result<i32, Box<dyn Error>> {
         loop {
             let mut peers: Option<Vec<Peer>> = None;
             if let Ok(mut l) = self.state.lock() {
@@ -47,9 +47,7 @@ impl Daemon {
                     let addrs = self.state.lock().unwrap().get_addresses(peer);
 
                     for addr in addrs {
-                        let rt = tokio::runtime::Runtime::new().unwrap();
-                        let state = self.state.clone();
-                        rt.block_on(async { connect_to_server(state, addr).await })?;
+                        connect_to_server(self.state.clone(), addr).await?;
                     }
                 }
             }

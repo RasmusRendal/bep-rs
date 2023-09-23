@@ -35,12 +35,10 @@ impl Server {
         self.bind_address = Some(new_addr);
     }
 
-    pub fn run(&mut self) -> Result<i32, Box<dyn Error>> {
+    pub async fn run(&mut self) -> Result<i32, Box<dyn Error>> {
         let address = self.bind_address.clone().unwrap();
         log::info!("Starting server, listening on {} ...", address);
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let state = self.state.clone();
-        rt.block_on(async { run_server(address, state).await })?;
+        run_server(address, self.state.clone()).await?;
         Ok(0)
     }
 }
