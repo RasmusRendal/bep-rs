@@ -2,6 +2,7 @@ use super::models::*;
 use super::peer_connection::PeerConnection;
 use super::sync_directory;
 use diesel::prelude::*;
+use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
 use std::fs;
 use std::path::PathBuf;
 
@@ -225,6 +226,11 @@ impl BepState {
 
     pub fn get_key(&mut self) -> Vec<u8> {
         self.get_options().unwrap().key
+    }
+
+    pub fn get_keypair(&mut self) -> EcdsaKeyPair {
+        let key = self.get_key();
+        EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &key).unwrap()
     }
 
     pub fn get_name(&mut self) -> String {
