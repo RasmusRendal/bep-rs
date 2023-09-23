@@ -23,3 +23,19 @@ pub fn hex_to_bytes(s: &String) -> Vec<u8> {
     }
     v
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bytes_to_hex() {
+        let bytes: [u8; 4] = [2, 14, 174, 15];
+        let hexstr = bytes_to_hex(&bytes);
+        let result = hex_to_bytes(&hexstr);
+        assert_eq!(bytes.len(), result.len());
+        for i in 0..bytes.len() {
+            assert_eq!(bytes[i], result[i]);
+        }
+    }
+}
