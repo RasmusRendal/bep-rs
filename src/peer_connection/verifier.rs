@@ -46,7 +46,7 @@ impl BepVerifier {
     pub fn check_cert(&self, cert: &Certificate) -> bool {
         let hash = digest::digest(&digest::SHA256, &cert.0);
         for peer_id in &self.peer_ids {
-            if compare_arrays(hash.as_ref(), &peer_id) {
+            if compare_arrays(hash.as_ref(), peer_id) {
                 *self.verified_id.lock().unwrap() = peer_id.clone();
                 return true;
             }
@@ -105,7 +105,7 @@ pub async fn verify_connection(
         let config = tokio_rustls::rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_custom_certificate_verifier(verifier)
-            .with_single_cert(vec![certificate.clone()], key.clone())
+            .with_client_auth_cert(vec![certificate.clone()], key.clone())
             .unwrap();
 
         let connector = tokio_rustls::TlsConnector::from(Arc::new(config));

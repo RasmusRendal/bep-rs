@@ -45,6 +45,7 @@ fn comp_hashes(h1: &Vec<u8>, h2: &Vec<u8>) -> bool {
 
 impl SyncDirectory {
     pub fn generate_index(&self, state: &mut BepState) -> Vec<SyncFile> {
+        // TODO: Handle errors in some manner
         let mut changed = false;
         let short_id = state.get_short_id();
         let path = self.path.clone();
@@ -90,7 +91,11 @@ impl SyncDirectory {
 
         if changed {
             for connection in &mut state.listeners {
-                connection.directory_updated(self);
+                let mut cl = connection.clone();
+                let d = self.clone();
+                tokio::spawn(async move {
+                    cl.directory_updated(&d).await;
+                });
             }
         }
         files

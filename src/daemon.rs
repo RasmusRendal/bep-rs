@@ -21,7 +21,7 @@ async fn connect_to_server(state: Arc<Mutex<BepState>>, addr: String) -> io::Res
 
     let stream = TcpStream::connect(addr).await?;
     let mut connection = PeerConnection::new(stream, state, true);
-    connection.wait_for_close().await;
+    connection.wait_for_close().await?;
     Ok(())
 }
 
