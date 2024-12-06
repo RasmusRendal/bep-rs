@@ -1,1 +1,6 @@
 /target
+
+# Nix stuff
+/.envrc
+/.devenv/
+/.pre-commit-config.yaml
