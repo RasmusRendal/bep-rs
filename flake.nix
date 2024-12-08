@@ -4,11 +4,11 @@
   inputs = {
     nixpkgs.url = "nixpkgs/master";
     flake-utils.url = "github:numtide/flake-utils";
-    devenv.url = "github:cachix/devenv/v0.6.3";
+    devenv.url = "github:cachix/devenv";
     fenix.url = "github:nix-community/fenix";
     fenix.inputs.nixpkgs.follows = "nixpkgs";
   };
-outputs = {
+  outputs = {
     self,
     nixpkgs,
     flake-utils,
@@ -28,8 +28,8 @@ outputs = {
           }: {
             packages = with pkgs; [sqlite git diesel-cli openssl protobuf tokio-console openssl pkg-config];
             languages.rust = {
-                enable = true;
-                version = "latest";
+              enable = true;
+              channel = "stable";
             };
             pre-commit.hooks = {
               rustfmt.enable = true;
@@ -39,6 +39,3 @@ outputs = {
       };
     });
 }
-
-
-        #buildInputs = with pkgs; [cargo rustc git sqlite diesel-cli rust-analyzer protobuf rustfmt tokio-console clippy openssl pkg-config];
