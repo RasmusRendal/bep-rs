@@ -17,7 +17,7 @@ use ring::digest;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Error, ErrorKind, Write};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{channel, Sender, UnboundedSender};
@@ -60,10 +60,9 @@ pub struct PeerConnection {
     // A channel to activate, to shut down the connection
     shutdown_send: UnboundedSender<()>,
 
-    // Hack for semi-constants. But these are sometimes acquired
-    // from the peer, and the connection object is initialized synchronously.
-    peer_id: Arc<RwLock<Vec<u8>>>,
-    name: Arc<RwLock<String>>,
+    // Set when the peer connects
+    peer_id: Arc<OnceLock<Vec<u8>>>,
+    name: Arc<OnceLock<String>>,
 }
 
 impl PeerConnection {
@@ -79,8 +78,8 @@ impl PeerConnection {
             requests: Arc::new(RwLock::new(HashMap::new())),
             tx,
             shutdown_send,
-            peer_id: Arc::new(RwLock::new(vec![])),
-            name: Arc::new(RwLock::new("".to_string())),
+            peer_id: Arc::new(OnceLock::new()),
+            name: Arc::new(OnceLock::new()),
         };
         let peer_connectionc = peer_connection.clone();
         tokio::spawn(async move {
@@ -260,10 +259,9 @@ impl PeerConnection {
     }
 
     pub fn get_name(&self) -> String {
-        if self.name.read().unwrap().is_empty() {
-            *self.name.write().unwrap() = self.state.lock().unwrap().get_name();
-        }
-        self.name.read().unwrap().clone()
+        self.name
+            .get_or_init(|| self.state.lock().unwrap().get_name())
+            .clone()
     }
 
     pub async fn submit_message(&self, msg: Vec<u8>) {
@@ -323,13 +321,13 @@ impl PeerConnection {
     }
 
     fn set_peer(&self, id: Vec<u8>) {
-        *self.peer_id.write().unwrap() = id;
+        self.peer_id.set(id).unwrap();
     }
 
     /// Get the peer this connection is to
     pub fn get_peer(&self) -> Option<Peer> {
         let peers = self.state.lock().unwrap().get_peers();
-        let peer_id = self.peer_id.as_ref().read().unwrap().clone();
+        let peer_id = self.peer_id.as_ref().get().unwrap().clone();
         // TODO: Check properly
         peers
             .into_iter()
