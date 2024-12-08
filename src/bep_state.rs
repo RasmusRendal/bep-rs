@@ -366,16 +366,12 @@ impl BepState {
             .expect("Error syncing directory");
     }
 
-    pub fn is_directory_synced(
-        &mut self,
-        directory: &sync_directory::SyncDirectory,
-        peer: &Peer,
-    ) -> bool {
+    pub fn is_directory_synced(&mut self, directory: String, peer: i32) -> bool {
         use crate::schema::folder_shares::dsl::*;
 
         folder_shares
-            .filter(sync_folder_id.eq(directory.id.clone()))
-            .filter(peer_id.eq(peer.id.unwrap()))
+            .filter(sync_folder_id.eq(directory))
+            .filter(peer_id.eq(peer))
             .load::<FolderShare>(&mut self.connection)
             .map(|x| !x.is_empty())
             .unwrap_or(false)

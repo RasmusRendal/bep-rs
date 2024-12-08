@@ -3,6 +3,7 @@ mod items;
 mod handlers;
 mod verifier;
 use crate::bep_state::BepState;
+use crate::bep_state_reference::BepStateRef;
 use crate::models::Peer;
 use crate::sync_directory::{SyncDirectory, SyncFile};
 use handlers::handle_connection;
@@ -50,8 +51,9 @@ pub struct PeerRequestListener {
 /// BeerConnection.
 #[derive(Clone)]
 pub struct PeerConnection {
-    state: Arc<Mutex<BepState>>,
+    state: BepStateRef,
     // Handles for pending requests that need to be answered
+    // We just keep it around, to empty it when the channel closes
     requests: Arc<RwLock<HashMap<i32, PeerRequestListener>>>,
     // A channel for sending messages that should be sent to the peer
     // Each message may optionally include a oneshot sender, if we need
@@ -74,7 +76,7 @@ impl PeerConnection {
         let (tx, rx) = channel(100);
         let (shutdown_send, shutdown_recv) = tokio::sync::mpsc::unbounded_channel::<()>();
         let peer_connection = PeerConnection {
-            state: state.clone(),
+            state: BepStateRef::new(state.clone()),
             requests: Arc::new(RwLock::new(HashMap::new())),
             tx,
             shutdown_send,
@@ -109,17 +111,17 @@ impl PeerConnection {
         peer_connectionc
     }
 
-    pub async fn send_index(&self) -> io::Result<()> {
+    pub async fn send_index(&mut self) -> io::Result<()> {
         if let Some(peer) = self.get_peer() {
-            let directories = self.state.lock().unwrap().get_sync_directories();
+            let directories = self.state.get_sync_directories().await;
             for dir in directories {
-                if !self.state.lock().unwrap().is_directory_synced(&dir, &peer) {
+                if !self.state.is_directory_synced(&dir, &peer).await {
                     continue;
                 }
                 let index = items::Index {
                     folder: dir.id.clone(),
                     files: dir
-                        .generate_index(&mut self.state.as_ref().lock().unwrap())
+                        .generate_index(&mut self.state.state.as_ref().lock().unwrap())
                         .iter()
                         .map(|x| items::FileInfo {
                             name: x.get_name(&dir),
@@ -230,9 +232,8 @@ impl PeerConnection {
                 let mut sync_file = sync_file.to_owned();
                 sync_file.synced_version = sync_file.get_index_version();
                 self.state
-                    .lock()
-                    .unwrap()
-                    .update_sync_file(directory, &sync_file);
+                    .update_sync_file(directory.clone(), sync_file)
+                    .await;
             }
             _ => {
                 return Err(io::Error::new(
@@ -246,21 +247,21 @@ impl PeerConnection {
 
     pub async fn get_directory(&self, directory: &SyncDirectory) -> io::Result<()> {
         log::info!("{}: Syncing directory {}", self.get_name(), directory.label);
-        let index = directory.generate_index(&mut self.state.as_ref().lock().unwrap());
+        let index = directory.generate_index(&mut self.state.state.as_ref().lock().unwrap());
 
         for file in &index {
             if file.synced_version < file.get_index_version() {
                 self.get_file(directory, file).await?;
             }
         }
-        directory.generate_index(&mut self.state.as_ref().lock().unwrap());
+        directory.generate_index(&mut self.state.state.as_ref().lock().unwrap());
         log::info!("{}: Syncing complete", self.get_name());
         Ok(())
     }
 
     pub fn get_name(&self) -> String {
         self.name
-            .get_or_init(|| self.state.lock().unwrap().get_name())
+            .get_or_init(|| self.state.state.lock().unwrap().get_name())
             .clone()
     }
 
@@ -326,7 +327,7 @@ impl PeerConnection {
 
     /// Get the peer this connection is to
     pub fn get_peer(&self) -> Option<Peer> {
-        let peers = self.state.lock().unwrap().get_peers();
+        let peers = self.state.state.lock().unwrap().get_peers();
         let peer_id = self.peer_id.as_ref().get().unwrap().clone();
         // TODO: Check properly
         peers
@@ -359,9 +360,8 @@ impl PeerConnection {
         log::info!("sending");
         let mut synced_index_updated = false;
         if let Some(peer) = self.get_peer() {
-            let mut state = self.state.lock().unwrap();
-            if let Some(directory) = state.get_sync_directory(&directory.id.clone()) {
-                if state.is_directory_synced(&directory, &peer) {
+            if let Some(directory) = self.state.get_sync_directory(&directory.id.clone()).await {
+                if self.state.is_directory_synced(&directory, &peer).await {
                     synced_index_updated = true;
                 }
             }

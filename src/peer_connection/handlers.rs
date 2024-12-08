@@ -26,18 +26,16 @@ async fn handle_request(
 
     let dir = peer_connection
         .state
-        .lock()
-        .unwrap()
-        .get_sync_directory(&request.folder);
+        .get_sync_directory(&request.folder)
+        .await;
 
     let peer = peer_connection.get_peer().unwrap();
 
     if dir.is_none()
         || !peer_connection
             .state
-            .lock()
-            .unwrap()
             .is_directory_synced(dir.as_ref().unwrap(), &peer)
+            .await
     {
         log::error!("Peer requested file, but it does not exist");
         let response = items::Response {
@@ -126,12 +124,11 @@ async fn handle_index(
     log::info!("{}: Handling index", peer_connection.get_name());
     let syncdir = peer_connection
         .state
-        .lock()
-        .unwrap()
         .get_sync_directory(&index.folder)
+        .await
         .unwrap();
     let mut localindex =
-        syncdir.generate_index(&mut peer_connection.state.as_ref().lock().unwrap());
+        syncdir.generate_index(&mut peer_connection.state.state.as_ref().lock().unwrap());
     for file in index.files {
         log::info!(
             "{}: Handling index file {}",
@@ -162,9 +159,8 @@ async fn handle_index(
             localfile.modified_by = file.modified_by;
             peer_connection
                 .state
-                .lock()
-                .unwrap()
-                .update_sync_file(&syncdir, localfile);
+                .update_sync_file(syncdir.clone(), localfile.clone())
+                .await;
         } else {
             log::info!("{}: New file {}", peer_connection.get_name(), file.name);
             let mut path = syncdir.path.clone();
@@ -185,9 +181,8 @@ async fn handle_index(
             };
             peer_connection
                 .state
-                .lock()
-                .unwrap()
-                .update_sync_file(&syncdir, &syncfile);
+                .update_sync_file(syncdir.clone(), syncfile)
+                .await;
         }
     }
     log::info!("{}: Index merged", peer_connection.get_name());
@@ -314,7 +309,7 @@ async fn handle_hello(
 /// it simply adds is to the tx queue
 pub async fn handle_connection(
     mut stream: (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
-    peer_connection: PeerConnection,
+    mut peer_connection: PeerConnection,
     rx: Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
     mut shutdown_recv: UnboundedReceiver<()>,
     connector: bool,
@@ -323,15 +318,23 @@ pub async fn handle_connection(
 
     let peerids = peer_connection
         .state
+        .state
         .lock()
         .unwrap()
         .get_peers()
         .into_iter()
         .map(|x| x.device_id.unwrap_or_default().clone())
         .collect();
-    let certificate =
-        tokio_rustls::rustls::Certificate(peer_connection.state.lock().unwrap().get_certificate());
-    let key = tokio_rustls::rustls::PrivateKey(peer_connection.state.lock().unwrap().get_key());
+    let certificate = tokio_rustls::rustls::Certificate(
+        peer_connection
+            .state
+            .state
+            .lock()
+            .unwrap()
+            .get_certificate(),
+    );
+    let key =
+        tokio_rustls::rustls::PrivateKey(peer_connection.state.state.lock().unwrap().get_key());
 
     let (tcpstream, peer_id) =
         verify_connection(stream, certificate, key, peerids, connector).await?;
@@ -368,6 +371,7 @@ pub async fn handle_connection(
 
     // Remove from list of listeners
     peer_connection
+        .state
         .state
         .lock()
         .unwrap()
