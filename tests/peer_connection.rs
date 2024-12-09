@@ -1,4 +1,5 @@
 use bep_rs::bep_state::BepState;
+use bep_rs::bep_state_reference::BepStateRef;
 use bep_rs::peer_connection::*;
 use bep_rs::sync_directory::SyncFile;
 use std::fs::File;
@@ -221,6 +222,8 @@ async fn test_get_directory() -> io::Result<()> {
     let statedir2 = tempfile::tempdir().unwrap().into_path();
     let state1 = Arc::new(Mutex::new(BepState::new(statedir1)));
     let state2 = Arc::new(Mutex::new(BepState::new(statedir2)));
+    let state1ref = BepStateRef::new(state1.clone());
+    let state2ref = BepStateRef::new(state2.clone());
     state1.lock().unwrap().set_name("con1".to_string());
     state2.lock().unwrap().set_name("con2".to_string());
 
@@ -243,6 +246,9 @@ async fn test_get_directory() -> io::Result<()> {
         .unwrap()
         .add_sync_directory(dstpath.clone(), Some(srcdir.id.clone()));
 
+    srcdir.generate_index(&state2ref).await;
+    dstdir.generate_index(&state1ref).await;
+
     let peer1 = state2
         .lock()
         .unwrap()
@@ -264,10 +270,9 @@ async fn test_get_directory() -> io::Result<()> {
     let mut connection1 = PeerConnection::new(client, state1, false);
     let mut connection2 = PeerConnection::new(server, state2, true);
 
-    // Wait for the index to be received
-    // TODO: Introduce a call that lets us wait until the connection is set up
     log::info!("Waiting for testfile");
     thread::sleep(time::Duration::from_millis(200));
+    connection1.get_directory(&dstdir).await.unwrap();
 
     let mut dstfile = dstpath.clone();
     dstfile.push("testfile");
@@ -299,6 +304,8 @@ async fn test_update_file() -> io::Result<()> {
     let state2 = Arc::new(Mutex::new(BepState::new(statedir2)));
     state1.lock().unwrap().set_name("con1".to_string());
     state2.lock().unwrap().set_name("con2".to_string());
+    let state1ref = BepStateRef::new(state1.clone());
+    let state2ref = BepStateRef::new(state2.clone());
 
     let srcpath = tempfile::tempdir().unwrap().into_path();
     let dstpath = tempfile::tempdir().unwrap().into_path();
@@ -318,6 +325,9 @@ async fn test_update_file() -> io::Result<()> {
         .lock()
         .unwrap()
         .add_sync_directory(dstpath.clone(), Some(srcdir.id.clone()));
+
+    srcdir.generate_index(&state2ref).await;
+    dstdir.generate_index(&state1ref).await;
 
     let peer1 = state2
         .lock()
@@ -355,6 +365,8 @@ async fn test_update_file() -> io::Result<()> {
     buf_reader.read_to_string(&mut contents)?;
     assert_eq!(contents, file_contents1);
 
+    log::info!("Successfully synced the first file");
+
     // Now we overwrite the file in dstdir
     {
         let mut helloworld = dstpath.clone();
@@ -362,6 +374,12 @@ async fn test_update_file() -> io::Result<()> {
         let mut o = File::create(helloworld)?;
         o.write_all(file_contents2.as_bytes())?;
     }
+
+    //srcdir.generate_index(&state2ref).await;
+    log::info!("Generating second index");
+    dstdir.generate_index(&state1ref).await;
+    log::info!("Successfully generated second index");
+    thread::sleep(time::Duration::from_millis(200));
 
     // And then we request the file we just overwrote
     // However, requesting this file shouldn't overwrite it in dstdir,
@@ -377,7 +395,8 @@ async fn test_update_file() -> io::Result<()> {
     buf_reader.read_to_string(&mut actual_contents)?;
     assert_eq!(actual_contents, file_contents2);
 
-    let i = dstdir.generate_index(&mut state1.as_ref().lock().unwrap());
+    let stateref = BepStateRef::new(state1);
+    let i = dstdir.generate_index(&stateref).await;
     assert_eq!(i[0].versions.len(), 2);
 
     // Sync the file modified in dstdir to srcdir

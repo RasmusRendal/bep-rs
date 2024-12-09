@@ -1,4 +1,4 @@
-use super::bep_state::BepState;
+use super::bep_state_reference::BepStateRef;
 use ring::digest;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -44,12 +44,12 @@ fn comp_hashes(h1: &Vec<u8>, h2: &Vec<u8>) -> bool {
 }
 
 impl SyncDirectory {
-    pub fn generate_index(&self, state: &mut BepState) -> Vec<SyncFile> {
+    pub async fn generate_index(&self, state: &BepStateRef) -> Vec<SyncFile> {
         // TODO: Handle errors in some manner
         let mut changed = false;
-        let short_id = state.get_short_id();
+        let short_id = state.state.lock().unwrap().get_short_id();
         let path = self.path.clone();
-        let mut files = state.get_sync_files(&self.id);
+        let mut files = state.state.lock().unwrap().get_sync_files(&self.id);
         for file in path.read_dir().unwrap().flatten() {
             let mut buf_reader = BufReader::new(File::open(file.path()).unwrap());
             let mut data = Vec::new();
@@ -66,7 +66,11 @@ impl SyncDirectory {
                         index_file.synced_version = vnumber;
                         index_file.versions.push((short_id, vnumber));
                         index_file.hash = hash;
-                        state.update_sync_file(self, index_file);
+                        state
+                            .state
+                            .lock()
+                            .unwrap()
+                            .update_sync_file(self, index_file);
                         changed = true;
                     }
                 }
@@ -79,7 +83,11 @@ impl SyncDirectory {
                         synced_version: 1,
                         versions: vec![(short_id, 1)],
                     });
-                    state.update_sync_file(self, files.last().unwrap());
+                    state
+                        .state
+                        .lock()
+                        .unwrap()
+                        .update_sync_file(self, files.last().unwrap());
                     changed = true;
                 }
             }
@@ -90,7 +98,13 @@ impl SyncDirectory {
         }
 
         if changed {
-            for connection in &mut state.listeners {
+            /*
+            let tasks: Vec<_> = state.state.lock().unwrap().listeners.iter_mut().map(|l| l.clone()).map(|mut l| l.directory_updated(self)).collect();
+            for task in tasks {
+                task.await;
+            }
+            */
+            for connection in &mut state.state.lock().unwrap().listeners {
                 let mut cl = connection.clone();
                 let d = self.clone();
                 tokio::spawn(async move {
@@ -99,6 +113,21 @@ impl SyncDirectory {
             }
         }
         files
+    }
+
+    pub async fn get_index(&self, state: BepStateRef) -> Vec<SyncFile> {
+        let files = state.state.lock().unwrap().get_sync_files(&self.id);
+        files
+            .into_iter()
+            .map(|f| SyncFile {
+                id: f.id,
+                path: f.path,
+                hash: f.hash,
+                modified_by: f.modified_by,
+                synced_version: f.synced_version,
+                versions: f.versions,
+            })
+            .collect()
     }
 }
 
@@ -146,11 +175,12 @@ impl SyncFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bep_state::BepState;
     use std::fs::File;
     use std::io::Write;
 
-    #[test]
-    fn test_generate_index() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_generate_index() {
         let statedir = tempfile::tempdir().unwrap().into_path();
         let mut state = BepState::new(statedir);
 
@@ -168,7 +198,9 @@ mod tests {
 
         let directory = state.add_sync_directory(path.clone(), None);
 
-        let mut index = directory.generate_index(&mut state);
+        let mut index = directory
+            .generate_index(&BepStateRef::from_state(state))
+            .await;
         assert!(index.len() == 1);
         let fileinfo = index.pop().unwrap();
         assert!(fileinfo.path == helloworld);
@@ -198,13 +230,13 @@ mod tests {
         assert!(file.get_name(&directory) == "somefile");
     }
 
-    #[test]
-    fn test_update_index() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_update_index() {
         // Tests that a new version of the file is created in the database,
         // only when we change the file
         let _ = env_logger::builder().is_test(true).try_init();
         let statedir = tempfile::tempdir().unwrap().into_path();
-        let mut state = BepState::new(statedir);
+        let mut state = BepStateRef::from_state(BepState::new(statedir));
 
         let file_contents1 = "hello world";
         let file_contents2 = "some other contents";
@@ -220,27 +252,27 @@ mod tests {
             o.write_all(file_contents1.as_bytes()).unwrap();
         }
 
-        let directory = state.add_sync_directory(path.clone(), None);
+        let directory = state.add_sync_directory(path.clone(), None).await;
 
-        let mut index = directory.generate_index(&mut state);
+        let mut index = directory.generate_index(&state).await;
         assert!(index.len() == 1);
         let mut fileinfo = index.pop().unwrap();
         assert!(fileinfo.path == helloworld);
         assert!(fileinfo.hash == hash1);
         assert!(fileinfo.versions.len() == 1);
         let fileversion = fileinfo.versions.pop().unwrap();
-        assert!(fileversion.0 == state.get_short_id());
+        assert!(fileversion.0 == state.get_short_id().await);
         assert!(fileversion.1 == 1);
         log::info!("Successfully generated first index");
 
-        let mut index = directory.generate_index(&mut state);
+        let mut index = directory.generate_index(&state).await;
         assert!(index.len() == 1);
         let mut fileinfo = index.pop().unwrap();
         assert!(fileinfo.path == helloworld);
         assert!(fileinfo.hash == hash1);
         assert!(fileinfo.versions.len() == 1);
         let fileversion = fileinfo.versions.pop().unwrap();
-        assert!(fileversion.0 == state.get_short_id());
+        assert!(fileversion.0 == state.get_short_id().await);
         assert!(fileversion.1 == 1);
         log::info!("Successfully generated second index");
 
@@ -249,7 +281,7 @@ mod tests {
             o.write_all(file_contents2.as_bytes()).unwrap();
         }
 
-        let mut index = directory.generate_index(&mut state);
+        let mut index = directory.generate_index(&state).await;
         assert!(index.len() == 1);
         let mut fileinfo = index.pop().unwrap();
         assert!(fileinfo.path == helloworld);
@@ -257,10 +289,10 @@ mod tests {
 
         assert!(fileinfo.versions.len() == 2);
         let fileversion = fileinfo.versions.pop().unwrap();
-        assert!(fileversion.0 == state.get_short_id());
+        assert!(fileversion.0 == state.get_short_id().await);
         assert!(fileversion.1 == 2);
         let fileversion = fileinfo.versions.pop().unwrap();
-        assert!(fileversion.0 == state.get_short_id());
+        assert!(fileversion.0 == state.get_short_id().await);
         assert!(fileversion.1 == 1);
 
         log::info!("Successfully generated third index");

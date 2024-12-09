@@ -88,10 +88,9 @@ async fn handle_request(
 }
 
 async fn handle_response(
-    stream: &mut ReadHalf<impl AsyncRead>,
+    response: items::Response,
     peer_connection: PeerConnection,
 ) -> tokio::io::Result<()> {
-    let response = receive_message!(items::Response, stream)?;
     log::info!(
         "{}: Received response for request {}",
         peer_connection.get_name(),
@@ -127,8 +126,7 @@ async fn handle_index(
         .get_sync_directory(&index.folder)
         .await
         .unwrap();
-    let mut localindex =
-        syncdir.generate_index(&mut peer_connection.state.state.as_ref().lock().unwrap());
+    let mut localindex = syncdir.get_index(peer_connection.state.clone()).await;
     for file in index.files {
         log::info!(
             "{}: Handling index file {}",
@@ -197,11 +195,17 @@ async fn handle_reading(
     peer_connection: PeerConnection,
 ) -> tokio::io::Result<()> {
     loop {
+        log::info!("{}: Waiting for a new message", peer_connection.get_name());
         let header_len = tokio::time::timeout(Duration::from_millis(1000 * 30), stream.read_u16())
             .await?? as usize;
         let mut header = vec![0u8; header_len];
         stream.read_exact(&mut header).await?;
         let header = items::Header::decode(&*header)?;
+        log::info!(
+            "{}: Got a header of type {}",
+            peer_connection.get_name(),
+            header.r#type
+        );
         if header.compression != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -210,24 +214,33 @@ async fn handle_reading(
         }
         if header.r#type == items::MessageType::Request as i32 {
             log::info!("{}: Handling request", peer_connection.get_name());
-            let peer_connectionclone = peer_connection.clone();
+            let mut peer_connectionclone = peer_connection.clone();
             let request = receive_message!(items::Request, stream)?;
             tokio::spawn(async move {
-                if let Err(e) = handle_request(request, peer_connectionclone).await {
+                if let Err(e) = handle_request(request, peer_connectionclone.clone()).await {
                     log::error!("Received an error when handling request: {}", e);
+                    let _ = peer_connectionclone.close().await;
                 }
             });
         } else if header.r#type == items::MessageType::Index as i32 {
             let index = receive_message!(items::Index, stream)?;
-            let peer_connectionc = peer_connection.clone();
+            let mut peer_connectionc = peer_connection.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_index(index, peer_connectionc).await {
+                if let Err(e) = handle_index(index, peer_connectionc.clone()).await {
                     log::error!("Received an error when handling index: {}", e);
+                    let _ = peer_connectionc.close().await;
                 }
             });
         } else if header.r#type == items::MessageType::Response as i32 {
-            let peer_connectionclone = peer_connection.clone();
-            handle_response(stream, peer_connectionclone).await?;
+            log::info!("{}: Got a response", peer_connection.get_name());
+            let mut peer_connectionclone = peer_connection.clone();
+            let response = receive_message!(items::Response, stream)?;
+            tokio::spawn(async move {
+                if let Err(e) = handle_response(response, peer_connectionclone.clone()).await {
+                    log::error!("Received an error when handling response: {}", e);
+                    let _ = peer_connectionclone.close().await;
+                }
+            });
         } else if header.r#type == items::MessageType::Close as i32 {
             let close = receive_message!(items::Close, stream)?;
             log::info!(
@@ -388,7 +401,10 @@ pub async fn handle_connection(
         }
     }
     assert!(peer_connection.requests.read().unwrap().is_empty());
-    log::info!("Responded to all unhandled requests");
+    log::info!(
+        "{}: Responded to all unhandled requests",
+        peer_connection.get_name()
+    );
 
     Ok(())
 }

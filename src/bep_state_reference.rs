@@ -2,6 +2,7 @@ use crate::bep_state::BepState;
 use crate::models::Peer;
 use crate::sync_directory::{SyncDirectory, SyncFile};
 use futures::channel::oneshot;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::{channel, Sender};
@@ -10,6 +11,7 @@ enum BepStateCommand {
     GetSyncDirectories(oneshot::Sender<Vec<SyncDirectory>>),
     IsDirectorySynced(String, i32, oneshot::Sender<bool>),
     UpdateSyncFile(SyncDirectory, SyncFile, oneshot::Sender<()>),
+    AddSyncDirectory(PathBuf, Option<String>, oneshot::Sender<SyncDirectory>),
 }
 
 #[derive(Clone)]
@@ -30,6 +32,9 @@ async fn handle_commands(mut rx: Receiver<BepStateCommand>, state: Arc<Mutex<Bep
             BepStateCommand::UpdateSyncFile(directory, file, sender) => {
                 let _ = sender.send(state.lock().unwrap().update_sync_file(&directory, &file));
             }
+            BepStateCommand::AddSyncDirectory(path, id, sender) => {
+                let _ = sender.send(state.lock().unwrap().add_sync_directory(path, id));
+            }
         }
     }
     rx.close();
@@ -43,6 +48,10 @@ impl BepStateRef {
             handle_commands(receiver, sc).await;
         });
         BepStateRef { state, sender }
+    }
+
+    pub fn from_state(state: BepState) -> Self {
+        BepStateRef::new(Arc::new(Mutex::new(state)))
     }
 
     pub async fn get_sync_directories(&self) -> Vec<SyncDirectory> {
@@ -60,6 +69,15 @@ impl BepStateRef {
             .await
             .into_iter()
             .find(|dir| dir.id == *id)
+    }
+
+    pub async fn add_sync_directory(&mut self, path: PathBuf, id: Option<String>) -> SyncDirectory {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(BepStateCommand::AddSyncDirectory(path, id, tx))
+            .await
+            .unwrap();
+        rx.await.unwrap()
     }
 
     pub async fn is_directory_synced(&self, directory: &SyncDirectory, peer: &Peer) -> bool {
@@ -82,5 +100,9 @@ impl BepStateRef {
             .await
             .unwrap();
         rx.await.unwrap()
+    }
+
+    pub async fn get_short_id(&self) -> u64 {
+        self.state.lock().unwrap().get_short_id()
     }
 }

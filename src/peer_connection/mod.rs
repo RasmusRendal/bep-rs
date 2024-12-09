@@ -121,7 +121,8 @@ impl PeerConnection {
                 let index = items::Index {
                     folder: dir.id.clone(),
                     files: dir
-                        .generate_index(&mut self.state.state.as_ref().lock().unwrap())
+                        .get_index(self.state.clone())
+                        .await
                         .iter()
                         .map(|x| items::FileInfo {
                             name: x.get_name(&dir),
@@ -199,6 +200,8 @@ impl PeerConnection {
             from_temporary: false,
         };
 
+        log::info!("Submitting file request");
+
         let message = self
             .submit_request(
                 message_id,
@@ -206,6 +209,8 @@ impl PeerConnection {
                 message.encode_for_bep(),
             )
             .await?;
+
+        log::info!("Got response");
 
         match message {
             PeerRequestResponse::Response(response) => {
@@ -247,14 +252,13 @@ impl PeerConnection {
 
     pub async fn get_directory(&self, directory: &SyncDirectory) -> io::Result<()> {
         log::info!("{}: Syncing directory {}", self.get_name(), directory.label);
-        let index = directory.generate_index(&mut self.state.state.as_ref().lock().unwrap());
+        let index = directory.get_index(self.state.clone()).await;
 
         for file in &index {
             if file.synced_version < file.get_index_version() {
                 self.get_file(directory, file).await?;
             }
         }
-        directory.generate_index(&mut self.state.state.as_ref().lock().unwrap());
         log::info!("{}: Syncing complete", self.get_name());
         Ok(())
     }
@@ -357,7 +361,6 @@ impl PeerConnection {
     }
 
     pub async fn directory_updated(&mut self, directory: &SyncDirectory) {
-        log::info!("sending");
         let mut synced_index_updated = false;
         if let Some(peer) = self.get_peer() {
             if let Some(directory) = self.state.get_sync_directory(&directory.id.clone()).await {
