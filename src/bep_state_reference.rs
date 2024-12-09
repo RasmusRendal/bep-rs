@@ -30,7 +30,8 @@ async fn handle_commands(mut rx: Receiver<BepStateCommand>, state: Arc<Mutex<Bep
                 let _ = sender.send(state.lock().unwrap().is_directory_synced(directory, peer));
             }
             BepStateCommand::UpdateSyncFile(directory, file, sender) => {
-                let _ = sender.send(state.lock().unwrap().update_sync_file(&directory, &file));
+                state.lock().unwrap().update_sync_file(&directory, &file);
+                let _ = sender.send(());
             }
             BepStateCommand::AddSyncDirectory(path, id, sender) => {
                 let _ = sender.send(state.lock().unwrap().add_sync_directory(path, id));

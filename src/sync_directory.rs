@@ -31,7 +31,7 @@ pub struct SyncDirectory {
     pub path: PathBuf,
 }
 
-fn comp_hashes(h1: &Vec<u8>, h2: &Vec<u8>) -> bool {
+fn comp_hashes(h1: &[u8], h2: &[u8]) -> bool {
     if h1.len() != h2.len() {
         return false;
     }

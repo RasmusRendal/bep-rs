@@ -16,7 +16,7 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
     s
 }
 
-pub fn hex_to_bytes(s: &String) -> Vec<u8> {
+pub fn hex_to_bytes(s: &str) -> Vec<u8> {
     let mut v = Vec::new();
     for i in 0..(s.len() / 2) {
         v.push(u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap());

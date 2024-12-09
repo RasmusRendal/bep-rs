@@ -33,6 +33,7 @@
             };
             pre-commit.hooks = {
               rustfmt.enable = true;
+              clippy.enable = true;
             };
           })
         ];

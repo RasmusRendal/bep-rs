@@ -17,7 +17,7 @@ pub struct BepVerifier {
     verified_id: Arc<Mutex<Vec<u8>>>,
 }
 
-fn compare_arrays(arr1: &[u8], arr2: &Vec<u8>) -> bool {
+fn compare_arrays(arr1: &[u8], arr2: &[u8]) -> bool {
     if arr2.len() != arr1.len() {
         log::error!(
             "Expected len {} certificate, got {}",
@@ -119,10 +119,7 @@ pub async fn verify_connection(
             ),
         )
         .await?;
-        Ok((
-            clientstream?.try_into().unwrap(),
-            accepted_peer.lock().unwrap().clone(),
-        ))
+        Ok((clientstream?.into(), accepted_peer.lock().unwrap().clone()))
     } else {
         let config = tokio_rustls::rustls::ServerConfig::builder()
             .with_safe_defaults()
@@ -136,10 +133,7 @@ pub async fn verify_connection(
             tokio_rustls::TlsAcceptor::accept(&acceptor, stream),
         )
         .await?;
-        Ok((
-            serverstream?.try_into().unwrap(),
-            accepted_peer.lock().unwrap().clone(),
-        ))
+        Ok((serverstream?.into(), accepted_peer.lock().unwrap().clone()))
     }
 }
 
