@@ -2,6 +2,7 @@ use bep_rs::bep_state::BepState;
 use bep_rs::bep_state_reference::BepStateRef;
 use bep_rs::peer_connection::*;
 use bep_rs::sync_directory::SyncFile;
+use error::PeerConnectionError;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
@@ -82,8 +83,20 @@ async fn test_close_nonpeer() -> io::Result<()> {
     let (client, server) = tokio::io::duplex(64);
     let mut connection1 = PeerConnection::new(client, state1, false);
     let mut connection2 = PeerConnection::new(server, state2, true);
-    connection1.wait_for_close().await?;
-    connection2.wait_for_close().await?;
+    let err1 = connection1.wait_for_ready().await;
+    let err2 = connection2.wait_for_ready().await;
+    log::info!("Error 1: {:?}", err1);
+    log::info!("Error 2: {:?}", err2);
+    assert!(err1.is_err());
+    assert!(err2.is_err());
+    assert!(matches!(
+        err1.err().unwrap(),
+        PeerConnectionError::UnknownPeer
+    ));
+    assert!(matches!(
+        err2.err().unwrap(),
+        PeerConnectionError::UnknownPeer
+    ));
 
     Ok(())
 }

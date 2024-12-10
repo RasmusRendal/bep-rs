@@ -1,7 +1,7 @@
 use super::items::{self, EncodableItem};
 use super::verifier::verify_connection;
-use super::SyncFile;
 use super::{PeerConnection, PeerRequestResponse, PeerRequestResponseType};
+use super::{PeerConnectionError, SyncFile};
 use futures::channel::oneshot;
 use log;
 use prost::Message;
@@ -290,13 +290,15 @@ async fn handle_writing(
     mut rx: Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
 ) -> tokio::io::Result<()> {
     while let Some((msg, tx)) = rx.recv().await {
-        if let Err(e) = wr.write_all(&msg).await {
-            log::error!(
-                "{}: Error writing message, closing",
-                peer_connection.get_name()
-            );
-            close_receiver(rx).await;
-            return Err(e);
+        if !msg.is_empty() {
+            if let Err(e) = wr.write_all(&msg).await {
+                log::error!(
+                    "{}: Error writing message, closing",
+                    peer_connection.get_name()
+                );
+                close_receiver(rx).await;
+                return Err(e);
+            }
         }
         log::info!("{}: Wrote message", peer_connection.get_name());
         if let Some(tx) = tx {
@@ -316,7 +318,7 @@ async fn handle_writing(
 async fn handle_hello(
     stream: &mut (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
     peer_connection: &PeerConnection,
-) -> io::Result<()> {
+) -> Result<(), PeerConnectionError> {
     let hello = items::exchange_hellos(stream, peer_connection.get_name().to_string()).await?;
     log::info!(
         "{}: Received hello from {}",
@@ -343,7 +345,7 @@ pub async fn handle_connection(
     rx: Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
     mut shutdown_recv: UnboundedReceiver<()>,
     connector: bool,
-) -> tokio::io::Result<()> {
+) -> Result<(), PeerConnectionError> {
     handle_hello(&mut stream, &peer_connection).await?;
 
     let peerids = peer_connection
@@ -366,8 +368,12 @@ pub async fn handle_connection(
     let key =
         tokio_rustls::rustls::PrivateKey(peer_connection.state.state.lock().unwrap().get_key());
 
-    let (tcpstream, peer_id) =
-        verify_connection(stream, certificate, key, peerids, connector).await?;
+    let conn_result = verify_connection(stream, certificate, key, peerids, connector).await;
+    if conn_result.is_err() {
+        return Err(PeerConnectionError::UnknownPeer);
+    }
+    let (tcpstream, peer_id) = conn_result.unwrap();
+    log::info!("Peer id: {:?}", peer_id);
     peer_connection.set_peer(peer_id);
     let (mut rd, wr) = tokio::io::split(tcpstream);
     peer_connection.send_index().await?;

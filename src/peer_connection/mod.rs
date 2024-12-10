@@ -1,11 +1,13 @@
 #[macro_use]
 mod items;
+pub mod error;
 mod handlers;
 mod verifier;
 use crate::bep_state::BepState;
 use crate::bep_state_reference::BepStateRef;
 use crate::models::Peer;
 use crate::sync_directory::{SyncDirectory, SyncFile};
+use error::{PeerCommandError, PeerConnectionError};
 use handlers::{drain_requests, handle_connection};
 
 use futures::channel::oneshot;
@@ -26,14 +28,14 @@ use tokio::sync::mpsc::{channel, Sender, UnboundedSender};
 #[derive(Copy, Clone, PartialEq)]
 pub enum PeerRequestResponseType {
     None,
+    WhenReady,
     WhenSent,
     WhenResponse,
     WhenClosed,
 }
-
 pub enum PeerRequestResponse {
     Response(items::Response),
-    Error(String),
+    Error(PeerCommandError),
     Sent,
     Closed,
 }
@@ -62,6 +64,9 @@ pub struct PeerConnection {
     // A channel to activate, to shut down the connection
     shutdown_send: UnboundedSender<()>,
 
+    // Any fatal error should be stored here
+    error: Arc<OnceLock<Option<PeerConnectionError>>>,
+
     // Set when the peer connects
     peer_id: Arc<OnceLock<Vec<u8>>>,
     name: Arc<OnceLock<String>>,
@@ -80,6 +85,7 @@ impl PeerConnection {
             requests: Arc::new(RwLock::new(HashMap::new())),
             tx,
             shutdown_send,
+            error: Arc::new(OnceLock::new()),
             peer_id: Arc::new(OnceLock::new()),
             name: Arc::new(OnceLock::new()),
         };
@@ -95,10 +101,17 @@ impl PeerConnection {
             .await
             {
                 log::error!(
-                    "{}: Error occured in client {}",
+                    "{}: Error occured in client {:?}",
                     peer_connection.get_name(),
                     e
                 );
+                if let Err(err) = peer_connection.error.set(Some(e)) {
+                    log::error!(
+                        "{}: Error storing error in client: {:?}",
+                        peer_connection.get_name(),
+                        err
+                    );
+                }
             }
             drain_requests(&peer_connection);
         });
@@ -338,6 +351,30 @@ impl PeerConnection {
         peers
             .into_iter()
             .find(|peer| &peer_id == peer.device_id.as_ref().unwrap())
+    }
+
+    fn has_error(&self) -> Result<(), PeerConnectionError> {
+        match self.error.get() {
+            Some(Some(e)) => Err(e.clone()),
+            Some(None) => Ok(()),
+            None => Ok(()),
+        }
+    }
+
+    pub async fn wait_for_ready(&mut self) -> Result<(), PeerConnectionError> {
+        let (tx, rx) = oneshot::channel();
+        let send = self.tx.send(([].to_vec(), Some(tx))).await;
+        if send.is_err() {
+            self.has_error()?;
+            return Err(PeerConnectionError::TimeoutError);
+        }
+        match rx.await {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                self.has_error()?;
+                Err(PeerConnectionError::Other("Unknown error".to_string()))
+            }
+        }
     }
 
     pub async fn wait_for_close(&mut self) -> io::Result<()> {

@@ -1,6 +1,7 @@
 use prost::Message;
-use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+use super::PeerConnectionError;
 
 include!(concat!(env!("OUT_DIR"), "/bep_rs.items.rs"));
 
@@ -51,7 +52,10 @@ macro_rules! receive_message {
 }
 
 /// Given a socket, send a BEP hello message
-pub async fn send_hello(socket: &mut (impl AsyncWriteExt + Unpin), name: String) -> io::Result<()> {
+pub async fn send_hello(
+    socket: &mut (impl AsyncWriteExt + Unpin),
+    name: String,
+) -> Result<(), PeerConnectionError> {
     let magic = HELLO_MAGIC.to_be_bytes().to_vec();
     socket.write_all(&magic).await?;
 
@@ -67,21 +71,17 @@ pub async fn send_hello(socket: &mut (impl AsyncWriteExt + Unpin), name: String)
     Ok(())
 }
 
-pub async fn receive_hello(socket: &mut (impl AsyncReadExt + Unpin)) -> io::Result<Hello> {
+pub async fn receive_hello(
+    socket: &mut (impl AsyncReadExt + Unpin),
+) -> Result<Hello, PeerConnectionError> {
     let mut hello_buffer: [u8; 4] = [0; 4];
     socket.read_exact(&mut hello_buffer).await?;
     let magic = u32::from_be_bytes(hello_buffer);
     if magic == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Did not receive any magic bytes",
-        ));
+        return Err(PeerConnectionError::InvalidMagicBytes);
     } else if magic != HELLO_MAGIC {
         log::error!("Invalid magic bytes: {:X}, {magic}", magic);
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Invalid magic bytes received",
-        ));
+        return Err(PeerConnectionError::InvalidMagicBytes);
     }
 
     Ok(receive_message!(Hello, socket)?)
@@ -90,7 +90,7 @@ pub async fn receive_hello(socket: &mut (impl AsyncReadExt + Unpin)) -> io::Resu
 pub async fn exchange_hellos(
     socket: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
     name: String,
-) -> io::Result<Hello> {
+) -> Result<Hello, PeerConnectionError> {
     send_hello(socket, name).await?;
     receive_hello(socket).await
 }

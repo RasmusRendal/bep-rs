@@ -20,6 +20,7 @@ tempfile = "3.4.0"
 ring = "0.16.20"
 rcgen = "0.10.0"
 tokio-rustls = { version = "0.24.0", features = [ "dangerous_configuration"] }
+thiserror = "2.0.6"
 
 [build-dependencies]
 prost-build = "0.11"
