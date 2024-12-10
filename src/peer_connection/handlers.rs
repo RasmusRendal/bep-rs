@@ -52,8 +52,20 @@ async fn handle_request(
     let dir = dir.unwrap();
     let mut path = dir.path.clone();
     path.push(request.name.clone());
-    let file = File::open(path).unwrap();
-    let mut buf_reader = BufReader::new(file);
+    let fh = File::open(path);
+    if fh.is_err() {
+        let response = items::Response {
+            id: request.id,
+            data: [].to_vec(),
+            code: items::ErrorCode::NoSuchFile as i32,
+        };
+        peer_connection
+            .submit_message(response.encode_for_bep())
+            .await;
+        return Ok(());
+    }
+
+    let mut buf_reader = BufReader::new(fh.unwrap());
     let mut data = Vec::new();
     buf_reader.read_to_end(&mut data)?;
 
@@ -307,8 +319,10 @@ async fn handle_writing(
                 close_receiver(rx).await;
                 return Err(e);
             }
+            wr.flush().await?;
+            log::info!("{}: Wrote message", peer_connection.get_name());
+            //log::info!("{}: Wrote message", peer_connection.get_name());
         }
-        log::info!("{}: Wrote message", peer_connection.get_name());
         if let Some(tx) = tx {
             let r = tx.send(PeerRequestResponse::Sent);
             if let Err(_e) = r {

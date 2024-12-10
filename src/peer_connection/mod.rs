@@ -263,6 +263,15 @@ impl PeerConnection {
                     }
                 }
             }
+            PeerRequestResponse::Error(e) => {
+                return Err(PeerCommandError::Other(format!(
+                    "Received an error while getting file: {}",
+                    e.to_string()
+                )));
+            }
+            PeerRequestResponse::Closed => {
+                return Err(PeerCommandError::ConnectionClosed);
+            }
             _ => {
                 return Err(PeerCommandError::Other(
                     "Got error on file request, and I don't know how to handle errors.".to_string(),
@@ -369,7 +378,7 @@ impl PeerConnection {
         }
     }
 
-    pub async fn wait_for_ready(&mut self) -> Result<(), PeerConnectionError> {
+    pub async fn wait_for_ready(&self) -> Result<(), PeerConnectionError> {
         let (tx, rx) = oneshot::channel();
         let send = self.tx.send(([].to_vec(), Some(tx))).await;
         if send.is_err() {
