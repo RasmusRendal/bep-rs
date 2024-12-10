@@ -68,6 +68,27 @@ async fn test_double_close_err() -> io::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn test_close_nonpeer() -> io::Result<()> {
+    // If we connect two nonpeered instances, the connection should close rapidly
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let statedir1 = tempfile::tempdir().unwrap().into_path();
+    let state1 = Arc::new(Mutex::new(BepState::new(statedir1)));
+    state1.lock().unwrap().set_name("con1".to_string());
+    let statedir2 = tempfile::tempdir().unwrap().into_path();
+    let state2 = Arc::new(Mutex::new(BepState::new(statedir2)));
+    state2.lock().unwrap().set_name("con2".to_string());
+
+    let (client, server) = tokio::io::duplex(64);
+    let mut connection1 = PeerConnection::new(client, state1, false);
+    let mut connection2 = PeerConnection::new(server, state2, true);
+    connection1.wait_for_close().await?;
+    connection2.wait_for_close().await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_get_file() -> io::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 

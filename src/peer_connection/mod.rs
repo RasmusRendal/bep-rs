@@ -6,7 +6,7 @@ use crate::bep_state::BepState;
 use crate::bep_state_reference::BepStateRef;
 use crate::models::Peer;
 use crate::sync_directory::{SyncDirectory, SyncFile};
-use handlers::handle_connection;
+use handlers::{drain_requests, handle_connection};
 
 use futures::channel::oneshot;
 use items::EncodableItem;
@@ -100,6 +100,7 @@ impl PeerConnection {
                     e
                 );
             }
+            drain_requests(&peer_connection);
         });
 
         state
@@ -340,10 +341,6 @@ impl PeerConnection {
     }
 
     pub async fn wait_for_close(&mut self) -> io::Result<()> {
-        if self.shutdown_send.is_closed() || self.tx.is_closed() {
-            log::info!("already shut");
-            return Ok(());
-        }
         let (tx, rx) = oneshot::channel();
         let id = StdRng::from_entropy().sample(Standard);
         self.requests.write().unwrap().insert(
@@ -354,6 +351,11 @@ impl PeerConnection {
                 peer_connection: tx,
             },
         );
+        if self.shutdown_send.is_closed() || self.tx.is_closed() {
+            log::info!("already shut");
+            return Ok(());
+        }
+
         if let Err(e) = rx.await {
             return Err(Error::new(ErrorKind::Other, e));
         }

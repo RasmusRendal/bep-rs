@@ -198,6 +198,11 @@ async fn handle_reading(
         log::info!("{}: Waiting for a new message", peer_connection.get_name());
         let header_len = tokio::time::timeout(Duration::from_millis(1000 * 30), stream.read_u16())
             .await?? as usize;
+        log::info!(
+            "{}: Got a header length {}",
+            peer_connection.get_name(),
+            header_len
+        );
         let mut header = vec![0u8; header_len];
         stream.read_exact(&mut header).await?;
         let header = items::Header::decode(&*header)?;
@@ -286,6 +291,10 @@ async fn handle_writing(
 ) -> tokio::io::Result<()> {
     while let Some((msg, tx)) = rx.recv().await {
         if let Err(e) = wr.write_all(&msg).await {
+            log::error!(
+                "{}: Error writing message, closing",
+                peer_connection.get_name()
+            );
             close_receiver(rx).await;
             return Err(e);
         }
@@ -315,6 +324,14 @@ async fn handle_hello(
         hello.client_name
     );
     Ok(())
+}
+
+pub fn drain_requests(peer_connection: &PeerConnection) {
+    let mut requests = peer_connection.requests.write().unwrap();
+    for (_key, channel) in requests.drain() {
+        let s = channel.peer_connection.send(PeerRequestResponse::Closed);
+        assert!(s.is_ok());
+    }
 }
 
 /// Starts two tasks, one that sends data over TCP, and one that receives
@@ -392,19 +409,5 @@ pub async fn handle_connection(
         .retain(|x| !x.tx.same_channel(&peer_connection.tx));
 
     log::info!("{}: Shutting down server", peer_connection.get_name());
-
-    {
-        let mut requests = peer_connection.requests.write().unwrap();
-        for (_key, channel) in requests.drain() {
-            let s = channel.peer_connection.send(PeerRequestResponse::Closed);
-            assert!(s.is_ok());
-        }
-    }
-    assert!(peer_connection.requests.read().unwrap().is_empty());
-    log::info!(
-        "{}: Responded to all unhandled requests",
-        peer_connection.get_name()
-    );
-
     Ok(())
 }
