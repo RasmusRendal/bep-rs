@@ -198,7 +198,7 @@ impl PeerConnection {
         &self,
         directory: &SyncDirectory,
         sync_file: &SyncFile,
-    ) -> tokio::io::Result<()> {
+    ) -> Result<(), PeerCommandError> {
         let message_id = StdRng::from_entropy().sample(Standard);
 
         let name = sync_file.get_name(directory);
@@ -228,43 +228,51 @@ impl PeerConnection {
 
         match message {
             PeerRequestResponse::Response(response) => {
-                if response.code != items::ErrorCode::NoError as i32 {
-                    log::error!("Error code when requesting data: {}", response.code);
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "Got an error when requesting data",
-                    ));
-                }
-                let hash = digest::digest(&digest::SHA256, &response.data);
-                if hash.as_ref() != sync_file.hash.clone() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Received file does not correspond to requested hash",
-                    ));
-                }
+                match items::ErrorCode::from_i32(response.code) {
+                    Some(items::ErrorCode::NoError) => {
+                        let hash = digest::digest(&digest::SHA256, &response.data);
+                        if hash.as_ref() != sync_file.hash.clone() {
+                            return Err(PeerCommandError::InvalidFile);
+                        }
 
-                let mut file = directory.path.clone();
-                file.push(sync_file.get_name(directory));
-                log::info!("Writing to path {:?}", file);
-                let mut o = File::create(file)?;
-                o.write_all(response.data.as_slice())?;
-                let mut sync_file = sync_file.to_owned();
-                sync_file.synced_version = sync_file.get_index_version();
-                self.state
-                    .update_sync_file(directory.clone(), sync_file)
-                    .await;
+                        let mut file = directory.path.clone();
+                        file.push(sync_file.get_name(directory));
+                        log::info!("Writing to path {:?}", file);
+                        let mut o = File::create(file)?;
+                        o.write_all(response.data.as_slice())?;
+                        let mut sync_file = sync_file.to_owned();
+                        sync_file.synced_version = sync_file.get_index_version();
+                        self.state
+                            .update_sync_file(directory.clone(), sync_file)
+                            .await;
+                    }
+                    Some(items::ErrorCode::NoSuchFile) => {
+                        return Err(PeerCommandError::NoSuchFile);
+                    }
+                    Some(items::ErrorCode::InvalidFile) => {
+                        return Err(PeerCommandError::InvalidFile);
+                    }
+                    Some(items::ErrorCode::Generic) => {
+                        return Err(PeerCommandError::Other("Generic Error".to_string()));
+                    }
+                    None => {
+                        return Err(PeerCommandError::Other(format!(
+                            "Invalid error code received: {}",
+                            response.code
+                        )));
+                    }
+                }
             }
             _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Got error on file request, and I don't know how to handle errors.",
+                return Err(PeerCommandError::Other(
+                    "Got error on file request, and I don't know how to handle errors.".to_string(),
                 ));
             }
         }
         Ok(())
     }
 
-    pub async fn get_directory(&self, directory: &SyncDirectory) -> io::Result<()> {
+    pub async fn get_directory(&self, directory: &SyncDirectory) -> Result<(), PeerCommandError> {
         log::info!("{}: Syncing directory {}", self.get_name(), directory.label);
         let index = directory.get_index(self.state.clone()).await;
 

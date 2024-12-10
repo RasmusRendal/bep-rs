@@ -39,6 +39,20 @@ impl From<prost::DecodeError> for PeerConnectionError {
 pub enum PeerCommandError {
     #[error("Connection closed unexpectedly.")]
     ConnectionClosed,
+    #[error("Invalid file requested")]
+    InvalidFile,
+    #[error("Inexistent File Requested")]
+    NoSuchFile,
     #[error("Error establishing connection: {0}")]
     ConnectionError(PeerConnectionError),
+    #[error("I/O Error: {0}")]
+    IOError(io::Error),
+    #[error("Unknown error type: {0}")]
+    Other(String),
+}
+
+impl From<io::Error> for PeerCommandError {
+    fn from(err: io::Error) -> Self {
+        PeerCommandError::IOError(err)
+    }
 }

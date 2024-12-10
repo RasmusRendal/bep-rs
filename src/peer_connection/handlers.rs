@@ -184,7 +184,15 @@ async fn handle_index(
         }
     }
     log::info!("{}: Index merged", peer_connection.get_name());
-    peer_connection.get_directory(&syncdir).await?;
+    tokio::spawn(async move {
+        if let Err(e) = peer_connection.get_directory(&syncdir).await {
+            log::error!(
+                "{}: Got error syncing directory {}",
+                peer_connection.get_name(),
+                e
+            );
+        }
+    });
 
     Ok(())
 }

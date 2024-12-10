@@ -2,6 +2,7 @@ use bep_rs::bep_state::BepState;
 use bep_rs::bep_state_reference::BepStateRef;
 use bep_rs::peer_connection::*;
 use bep_rs::sync_directory::SyncFile;
+use error::PeerCommandError;
 use error::PeerConnectionError;
 use std::fs::File;
 use std::io::prelude::*;
@@ -165,7 +166,7 @@ async fn test_get_file() -> io::Result<()> {
         versions: vec![(1, 1)],
     };
 
-    connection1.get_file(&dstdir, &file).await?;
+    connection1.get_file(&dstdir, &file).await.unwrap();
     let file = File::open(dstfile).unwrap();
     let mut buf_reader = BufReader::new(file);
     let mut contents = String::new();
@@ -237,6 +238,7 @@ async fn test_nonsynced_directory() -> io::Result<()> {
 
     let e = connection1.get_file(&dstdir, &file).await;
     assert!(e.is_err());
+    assert!(matches!(e.err().unwrap(), PeerCommandError::InvalidFile));
     connection1.close().await?;
     connection2.close().await?;
     Ok(())
@@ -387,7 +389,7 @@ async fn test_update_file() -> io::Result<()> {
     // Wait for the index to be received
     // TODO: Introduce a call that lets us wait until the connection is set up
     thread::sleep(time::Duration::from_millis(200));
-    connection1.get_directory(&dstdir).await?;
+    connection1.get_directory(&dstdir).await.unwrap();
 
     let mut dstfile = dstpath.clone();
     dstfile.push("testfile");
@@ -418,7 +420,7 @@ async fn test_update_file() -> io::Result<()> {
     // And then we request the file we just overwrote
     // However, requesting this file shouldn't overwrite it in dstdir,
     // because the change we just did is newer than the index in state2
-    connection1.get_directory(&dstdir).await?;
+    connection1.get_directory(&dstdir).await.unwrap();
     let mut dstfile = dstpath.clone();
     dstfile.push("testfile");
     let file = File::open(dstfile);
@@ -435,7 +437,7 @@ async fn test_update_file() -> io::Result<()> {
 
     // Sync the file modified in dstdir to srcdir
     thread::sleep(time::Duration::from_millis(200));
-    connection2.get_directory(&srcdir).await?;
+    connection2.get_directory(&srcdir).await.unwrap();
     let mut dstfile = srcpath.clone();
     dstfile.push("testfile");
     let file = File::open(dstfile);
