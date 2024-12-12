@@ -274,6 +274,10 @@ async fn handle_reading(
                 close.reason
             );
             return Ok(());
+        } else if header.r#type == items::MessageType::ClusterConfig as i32 {
+            let _cluster_config = receive_message!(items::ClusterConfig, stream)?;
+            log::info!("{}: We have received a cluster config. Your peer might have folders or other peers to share with you", peer_connection.get_name());
+            //TODO: Actually use this for something
         } else {
             log::error!(
                 "{}: Got unknown message type {}",
@@ -293,7 +297,9 @@ async fn handle_reading(
 /// # Arguments
 ///
 /// * `rx` - The receiver for the message queue
-async fn close_receiver(mut rx: Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>) {
+async fn close_receiver(
+    rx: &mut Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
+) {
     // Empty the message queue
     while let Some((_msg, txo)) = rx.recv().await {
         if let Some(tx) = txo {
@@ -304,24 +310,92 @@ async fn close_receiver(mut rx: Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRe
     rx.close();
 }
 
+async fn generate_cluster_config(peer_connection: &mut PeerConnection) -> items::ClusterConfig {
+    let peer_id = peer_connection.get_peer().unwrap().id.unwrap();
+    items::ClusterConfig {
+        folders: peer_connection
+            .state
+            .state
+            .lock()
+            .unwrap()
+            .get_synced_directories(peer_id)
+            .into_iter()
+            .map(|(dir, peers)| items::Folder {
+                id: dir.id,
+                label: dir.label,
+                read_only: false,
+                ignore_permissions: false,
+                ignore_delete: false,
+                disable_temp_indexes: true,
+                paused: false,
+                devices: peers
+                    .into_iter()
+                    .map(|peer| items::Device {
+                        id: peer.device_id.unwrap(),
+                        name: peer.name,
+                        addresses: Vec::new(),
+                        compression: 1,
+                        cert_name: "".to_string(),
+                        max_sequence: 0,
+                        introducer: false,
+                        index_id: 0,
+                        skip_introduction_removals: true,
+                        encryption_password_token: Vec::new(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+async fn write_message(
+    wr: &mut WriteHalf<impl AsyncWriteExt>,
+    peer_connection: &mut PeerConnection,
+    rx: &mut Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
+    msg: &[u8],
+) -> tokio::io::Result<()> {
+    if let Err(e) = wr.write_all(&msg).await {
+        log::error!(
+            "{}: Error writing message, closing",
+            peer_connection.get_name()
+        );
+        close_receiver(rx).await;
+        return Err(e);
+    }
+    wr.flush().await?;
+    log::info!("{}: Wrote message {:?}", peer_connection.get_name(), msg);
+    Ok(())
+}
+
 async fn handle_writing(
     mut wr: WriteHalf<impl AsyncWriteExt>,
-    peer_connection: PeerConnection,
+    mut peer_connection: PeerConnection,
     mut rx: Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
 ) -> tokio::io::Result<()> {
+    log::info!("Generating the cluster config");
+    let cluster_config = generate_cluster_config(&mut peer_connection).await;
+    log::info!(
+        "{}: The cluster config is {:?}",
+        peer_connection.get_name(),
+        cluster_config
+    );
+    log::info!("Sending the cluster config");
+
+    write_message(
+        &mut wr,
+        &mut peer_connection,
+        &mut rx,
+        &cluster_config.encode_for_bep(),
+    )
+    .await?;
+
+    log::info!("We sent the cluster config!");
+    log::info!("We sent the cluster config!");
+    log::info!("We sent the cluster config!");
+    log::info!("We sent the cluster config!");
     while let Some((msg, tx)) = rx.recv().await {
         if !msg.is_empty() {
-            if let Err(e) = wr.write_all(&msg).await {
-                log::error!(
-                    "{}: Error writing message, closing",
-                    peer_connection.get_name()
-                );
-                close_receiver(rx).await;
-                return Err(e);
-            }
-            wr.flush().await?;
-            log::info!("{}: Wrote message", peer_connection.get_name());
-            //log::info!("{}: Wrote message", peer_connection.get_name());
+            write_message(&mut wr, &mut peer_connection, &mut rx, &msg).await?;
         }
         if let Some(tx) = tx {
             let r = tx.send(PeerRequestResponse::Sent);
@@ -333,7 +407,7 @@ async fn handle_writing(
             }
         }
     }
-    close_receiver(rx).await;
+    close_receiver(&mut rx).await;
     Ok(())
 }
 

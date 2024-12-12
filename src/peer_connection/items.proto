@@ -108,3 +108,38 @@ message Counter {
     uint64 id    = 1;
     uint64 value = 2;
 }
+
+message ClusterConfig {
+    repeated Folder folders = 1;
+}
+
+message Folder {
+    string id                   = 1;
+    string label                = 2;
+    bool   read_only            = 3;
+    bool   ignore_permissions   = 4;
+    bool   ignore_delete        = 5;
+    bool   disable_temp_indexes = 6;
+    bool   paused               = 7;
+
+    repeated Device devices = 16;
+}
+
+message Device {
+    bytes           id                         = 1;
+    string          name                       = 2;
+    repeated string addresses                  = 3;
+    Compression     compression                = 4;
+    string          cert_name                  = 5;
+    int64           max_sequence               = 6;
+    bool            introducer                 = 7;
+    uint64          index_id                   = 8;
+    bool            skip_introduction_removals = 9;
+    bytes           encryption_password_token  = 10;
+}
+
+enum Compression {
+    METADATA = 0;
+    NEVER    = 1;
+    ALWAYS   = 2;
+}

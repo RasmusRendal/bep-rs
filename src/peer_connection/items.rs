@@ -35,6 +35,7 @@ implement!(Close);
 implement!(Request);
 implement!(Response);
 implement!(Index);
+implement!(ClusterConfig);
 
 /// Given a stream, read a four-byte length, and then
 /// the message

@@ -25,6 +25,14 @@ fn from_u64(i: u64) -> i64 {
     i64::from_ne_bytes(i.to_ne_bytes())
 }
 
+fn model_to_sync_dir(folder: SyncFolder) -> sync_directory::SyncDirectory {
+    sync_directory::SyncDirectory {
+        id: folder.id.clone().unwrap(),
+        label: folder.label.clone(),
+        path: PathBuf::from(folder.dir_path.clone()),
+    }
+}
+
 impl BepState {
     /// Initialize the state. It tries to read a database
     /// from the location data_directory. If this fails,
@@ -74,6 +82,41 @@ impl BepState {
                 .expect("Error adding directory");
         }
         s
+    }
+
+    pub fn get_directory_peers(&mut self, directory: &str) -> Vec<Peer> {
+        use crate::schema::folder_shares;
+        use crate::schema::peers;
+        use crate::schema::sync_folders;
+
+        peers::table
+            .inner_join(folder_shares::table.inner_join(sync_folders::table))
+            .filter(sync_folders::id.eq(directory))
+            .select(peers::all_columns)
+            .load::<Peer>(&mut self.connection)
+            .unwrap()
+    }
+
+    pub fn get_synced_directories(
+        &mut self,
+        peer_id: i32,
+    ) -> Vec<(sync_directory::SyncDirectory, Vec<Peer>)> {
+        use crate::schema::folder_shares;
+        use crate::schema::peers;
+        use crate::schema::sync_folders;
+        peers::table
+            .inner_join(folder_shares::table.inner_join(sync_folders::table))
+            .filter(peers::id.eq(peer_id))
+            .select(sync_folders::all_columns)
+            .load::<SyncFolder>(&mut self.connection)
+            .unwrap()
+            .into_iter()
+            .map(|d| {
+                let model = model_to_sync_dir(d);
+                let id = model.id.clone();
+                (model, self.get_directory_peers(&id))
+            })
+            .collect()
     }
 
     /// Get list of directories to be synced
