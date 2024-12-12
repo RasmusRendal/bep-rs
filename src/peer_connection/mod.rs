@@ -394,7 +394,7 @@ impl PeerConnection {
         }
     }
 
-    pub async fn wait_for_close(&mut self) -> io::Result<()> {
+    pub async fn wait_for_close(&self) -> io::Result<()> {
         let (tx, rx) = oneshot::channel();
         let id = StdRng::from_entropy().sample(Standard);
         self.requests.write().unwrap().insert(
@@ -430,16 +430,13 @@ impl PeerConnection {
         }
     }
 
-    pub async fn close(&mut self) -> tokio::io::Result<()> {
+    pub async fn close_reason(&self, reason: String) -> tokio::io::Result<()> {
         log::info!("{}: Connection close requested", self.get_name());
         if self.shutdown_send.is_closed() || self.tx.is_closed() {
             log::info!("already shut");
             return Ok(());
         }
-        let message = items::Close {
-            reason: "Exit by user".to_string(),
-        }
-        .encode_for_bep();
+        let message = items::Close { reason }.encode_for_bep();
         log::info!("submitted close");
         self.submit_request(-1, PeerRequestResponseType::WhenSent, message)
             .await?;
@@ -451,6 +448,17 @@ impl PeerConnection {
         let _ = self.shutdown_send.send(());
 
         Ok(())
+    }
+
+    pub async fn close(&self) -> tokio::io::Result<()> {
+        self.close_reason("Exit by user".to_string()).await
+    }
+
+    pub async fn close_err(&self, err: &Error) -> tokio::io::Result<()> {
+        match err {
+            _ => self.close_reason("Unknown error".to_string()),
+        }
+        .await
     }
 
     pub fn get_peer_name(&self) -> Option<String> {

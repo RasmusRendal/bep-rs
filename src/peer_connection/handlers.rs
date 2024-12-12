@@ -239,31 +239,31 @@ async fn handle_reading(
         }
         if header.r#type == items::MessageType::Request as i32 {
             log::info!("{}: Handling request", peer_connection.get_name());
-            let mut peer_connectionclone = peer_connection.clone();
+            let peer_connectionclone = peer_connection.clone();
             let request = receive_message!(items::Request, stream)?;
             tokio::spawn(async move {
                 if let Err(e) = handle_request(request, peer_connectionclone.clone()).await {
                     log::error!("Received an error when handling request: {}", e);
-                    let _ = peer_connectionclone.close().await;
+                    let _ = peer_connectionclone.close_err(&e).await;
                 }
             });
         } else if header.r#type == items::MessageType::Index as i32 {
             let index = receive_message!(items::Index, stream)?;
-            let mut peer_connectionc = peer_connection.clone();
+            let peer_connectionc = peer_connection.clone();
             tokio::spawn(async move {
                 if let Err(e) = handle_index(index, peer_connectionc.clone()).await {
                     log::error!("Received an error when handling index: {}", e);
-                    let _ = peer_connectionc.close().await;
+                    let _ = peer_connectionc.close_err(&e).await;
                 }
             });
         } else if header.r#type == items::MessageType::Response as i32 {
             log::info!("{}: Got a response", peer_connection.get_name());
-            let mut peer_connectionclone = peer_connection.clone();
+            let peer_connectionclone = peer_connection.clone();
             let response = receive_message!(items::Response, stream)?;
             tokio::spawn(async move {
                 if let Err(e) = handle_response(response, peer_connectionclone.clone()).await {
                     log::error!("Received an error when handling response: {}", e);
-                    let _ = peer_connectionclone.close().await;
+                    let _ = peer_connectionclone.close_err(&e).await;
                 }
             });
         } else if header.r#type == items::MessageType::Close as i32 {
@@ -407,6 +407,7 @@ pub async fn handle_connection(
         let r = handle_reading(&mut rd, peer_connectionclone.clone()).await;
         if let Err(e) = &r {
             log::error!("{}: Got error from reader: {}", name, e);
+            peer_connectionclone.close_err(e).await?;
         }
         let _r = sendclone.send(());
         r

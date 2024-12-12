@@ -125,7 +125,7 @@ async fn test_open_close() -> io::Result<()> {
 
     let mut test_struct = TestStruct::new();
     let _ = test_struct.peer();
-    let (mut connection1, mut connection2) = test_struct.connect().await.unwrap();
+    let (connection1, connection2) = test_struct.connect().await.unwrap();
 
     connection1.close().await.unwrap();
     connection2.close().await.unwrap();
@@ -140,7 +140,7 @@ async fn test_double_close_err() -> io::Result<()> {
 
     let mut test_struct = TestStruct::new();
     let _ = test_struct.peer();
-    let (mut connection1, mut connection2) = test_struct.connect().await.unwrap();
+    let (connection1, connection2) = test_struct.connect().await.unwrap();
 
     connection1.close().await?;
     log::info!("test_double_close_err: Close 1 completed");
@@ -176,7 +176,7 @@ async fn test_get_nonexistent_file() -> io::Result<()> {
     test_struct.add_sync_dirs().await;
     test_struct.connect_sync_dirs().await;
 
-    let (mut connection1, mut connection2) = test_struct.connect().await.unwrap();
+    let (connection1, connection2) = test_struct.connect().await.unwrap();
 
     let mut dstfile = test_struct.peer1dirpath.clone();
     dstfile.push(FILE_NAME);
@@ -213,7 +213,7 @@ async fn test_get_file() -> io::Result<()> {
     test_struct.add_sync_dirs().await;
     test_struct.connect_sync_dirs().await;
 
-    let (mut connection1, mut connection2) = test_struct.connect().await.unwrap();
+    let (connection1, connection2) = test_struct.connect().await.unwrap();
 
     let mut dstfile = test_struct.peer1dirpath.clone();
     dstfile.push(FILE_NAME);
@@ -253,7 +253,7 @@ async fn test_nonsynced_directory() -> io::Result<()> {
     test_struct.write_hello_file(FILE_CONTENTS);
     test_struct.add_sync_dirs().await;
 
-    let (mut connection1, mut connection2) = test_struct.connect().await.unwrap();
+    let (connection1, connection2) = test_struct.connect().await.unwrap();
 
     let mut dstfile = test_struct.peer1dirpath.clone();
     dstfile.push(FILE_NAME);
@@ -303,7 +303,7 @@ async fn test_get_directory() -> io::Result<()> {
         .generate_index(&test_struct.state2)
         .await;
 
-    let (mut connection1, mut connection2) = test_struct.connect().await.unwrap();
+    let (connection1, connection2) = test_struct.connect().await.unwrap();
 
     thread::sleep(time::Duration::from_millis(400));
     connection1
@@ -350,7 +350,7 @@ async fn test_update_file() -> io::Result<()> {
         .generate_index(&test_struct.state2)
         .await;
 
-    let (mut connection1, mut connection2) = test_struct.connect().await.unwrap();
+    let (connection1, connection2) = test_struct.connect().await.unwrap();
     // Wait for the index to be received
     // TODO: Introduce a call that lets us wait until the connection is set up
     thread::sleep(time::Duration::from_millis(200));
