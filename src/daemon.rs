@@ -1,4 +1,5 @@
-use super::bep_state::BepState;
+use crate::bep_state_reference::BepStateRef;
+
 use super::models::Peer;
 use log;
 use std::error::Error;
@@ -8,14 +9,13 @@ use std::{thread, time};
 use tokio::net::TcpStream;
 
 use super::peer_connection::PeerConnection;
-use std::sync::{Arc, Mutex};
 
 pub struct Daemon {
-    state: Arc<Mutex<BepState>>,
+    state: BepStateRef,
 }
 
 /// Try and connect to the server at addr
-async fn connect_to_server(state: Arc<Mutex<BepState>>, addr: String) -> io::Result<()> {
+async fn connect_to_server(state: BepStateRef, addr: String) -> io::Result<()> {
     log::info!(target: "Daemon", "");
     log::info!(target: "Daemon", "Connecting to {addr}");
 
@@ -26,10 +26,8 @@ async fn connect_to_server(state: Arc<Mutex<BepState>>, addr: String) -> io::Res
 }
 
 impl Daemon {
-    pub fn new(state: BepState) -> Self {
-        Daemon {
-            state: Arc::new(Mutex::new(state)),
-        }
+    pub fn new(state: BepStateRef) -> Self {
+        Daemon { state }
     }
 
     /// Runs the Daemon
@@ -39,12 +37,12 @@ impl Daemon {
     pub async fn run(&mut self) -> Result<i32, Box<dyn Error>> {
         loop {
             let mut peers: Option<Vec<Peer>> = None;
-            if let Ok(mut l) = self.state.lock() {
+            if let Ok(mut l) = self.state.state.lock() {
                 peers = Some(l.get_peers());
             }
             if let Some(list) = peers {
                 for peer in list {
-                    let addrs = self.state.lock().unwrap().get_addresses(peer);
+                    let addrs = self.state.state.lock().unwrap().get_addresses(peer);
 
                     for addr in addrs {
                         connect_to_server(self.state.clone(), addr).await?;

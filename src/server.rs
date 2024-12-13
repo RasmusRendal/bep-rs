@@ -1,19 +1,19 @@
-use super::bep_state::BepState;
+use crate::bep_state_reference::BepStateRef;
+
 use log;
 use std::error::Error;
 use std::io;
-use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
 use super::peer_connection::PeerConnection;
 
 pub struct Server {
     bind_address: Option<String>,
-    state: Arc<Mutex<BepState>>,
+    state: BepStateRef,
 }
 
 /// Listen for connections at address, printing whatever the client sends us
-async fn run_server(address: String, state: Arc<Mutex<BepState>>) -> io::Result<()> {
+async fn run_server(address: String, state: BepStateRef) -> io::Result<()> {
     let listener = TcpListener::bind(address).await?;
 
     loop {
@@ -24,7 +24,7 @@ async fn run_server(address: String, state: Arc<Mutex<BepState>>) -> io::Result<
 }
 
 impl Server {
-    pub fn new(state: Arc<Mutex<BepState>>) -> Self {
+    pub fn new(state: BepStateRef) -> Self {
         Server {
             bind_address: Some("0.0.0.0:21027".to_string()),
             state,

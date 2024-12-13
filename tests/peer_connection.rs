@@ -75,8 +75,8 @@ impl TestStruct {
         &mut self,
     ) -> Result<(PeerConnection, PeerConnection), PeerConnectionError> {
         let (client, server) = tokio::io::duplex(64);
-        let connection1 = PeerConnection::new(client, self.state1.state.clone(), false);
-        let connection2 = PeerConnection::new(server, self.state2.state.clone(), true);
+        let connection1 = PeerConnection::new(client, self.state1.clone(), false);
+        let connection2 = PeerConnection::new(server, self.state2.clone(), true);
         self.conn1 = Some(connection1.clone());
         self.conn2 = Some(connection2.clone());
         connection1.wait_for_ready().await?;

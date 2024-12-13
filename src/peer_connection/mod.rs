@@ -3,7 +3,6 @@ mod items;
 pub mod error;
 mod handlers;
 mod verifier;
-use crate::bep_state::BepState;
 use crate::bep_state_reference::BepStateRef;
 use crate::models::Peer;
 use crate::sync_directory::{SyncDirectory, SyncFile};
@@ -20,7 +19,7 @@ use ring::digest;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Error, ErrorKind, Write};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{channel, Sender, UnboundedSender};
@@ -75,13 +74,13 @@ pub struct PeerConnection {
 impl PeerConnection {
     pub fn new(
         socket: (impl AsyncWrite + AsyncRead + Unpin + Send + 'static),
-        state: Arc<Mutex<BepState>>,
+        state: BepStateRef,
         connector: bool,
     ) -> Self {
         let (tx, rx) = channel(100);
         let (shutdown_send, shutdown_recv) = tokio::sync::mpsc::unbounded_channel::<()>();
         let peer_connection = PeerConnection {
-            state: BepStateRef::new(state.clone()),
+            state: state.clone(),
             requests: Arc::new(RwLock::new(HashMap::new())),
             tx,
             shutdown_send,
@@ -117,6 +116,7 @@ impl PeerConnection {
         });
 
         state
+            .state
             .as_ref()
             .lock()
             .unwrap()
