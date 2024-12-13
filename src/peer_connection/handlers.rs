@@ -214,6 +214,13 @@ async fn handle_reading(
     stream: &mut ReadHalf<impl AsyncRead>,
     peer_connection: PeerConnection,
 ) -> tokio::io::Result<()> {
+    let hello = items::receive_hello(stream).await.unwrap();
+    log::info!(
+        "{}: Hello contents: {:?}",
+        peer_connection.get_name(),
+        hello
+    );
+
     loop {
         log::info!("{}: Waiting for a new message", peer_connection.get_name());
         let header_len = tokio::time::timeout(Duration::from_millis(1000 * 30), stream.read_u16())
@@ -354,7 +361,7 @@ async fn write_message(
     rx: &mut Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
     msg: &[u8],
 ) -> tokio::io::Result<()> {
-    if let Err(e) = wr.write_all(&msg).await {
+    if let Err(e) = wr.write_all(msg).await {
         log::error!(
             "{}: Error writing message, closing",
             peer_connection.get_name()
@@ -372,6 +379,9 @@ async fn handle_writing(
     mut peer_connection: PeerConnection,
     mut rx: Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
 ) -> tokio::io::Result<()> {
+    items::send_hello(&mut wr, peer_connection.get_name())
+        .await
+        .unwrap();
     log::info!("Generating the cluster config");
     let cluster_config = generate_cluster_config(&mut peer_connection).await;
     log::info!(
@@ -389,10 +399,6 @@ async fn handle_writing(
     )
     .await?;
 
-    log::info!("We sent the cluster config!");
-    log::info!("We sent the cluster config!");
-    log::info!("We sent the cluster config!");
-    log::info!("We sent the cluster config!");
     while let Some((msg, tx)) = rx.recv().await {
         if !msg.is_empty() {
             write_message(&mut wr, &mut peer_connection, &mut rx, &msg).await?;
@@ -411,19 +417,6 @@ async fn handle_writing(
     Ok(())
 }
 
-async fn handle_hello(
-    stream: &mut (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
-    peer_connection: &PeerConnection,
-) -> Result<(), PeerConnectionError> {
-    let hello = items::exchange_hellos(stream, peer_connection.get_name().to_string()).await?;
-    log::info!(
-        "{}: Received hello from {}",
-        peer_connection.get_name(),
-        hello.client_name
-    );
-    Ok(())
-}
-
 pub fn drain_requests(peer_connection: &PeerConnection) {
     let mut requests = peer_connection.requests.write().unwrap();
     for (_key, channel) in requests.drain() {
@@ -436,14 +429,12 @@ pub fn drain_requests(peer_connection: &PeerConnection) {
 /// If as a result of receiving a message, the server wants to transmit something,
 /// it simply adds is to the tx queue
 pub async fn handle_connection(
-    mut stream: (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
+    stream: (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
     mut peer_connection: PeerConnection,
     rx: Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
     mut shutdown_recv: UnboundedReceiver<()>,
-    connector: bool,
+    server: bool,
 ) -> Result<(), PeerConnectionError> {
-    handle_hello(&mut stream, &peer_connection).await?;
-
     let peerids = peer_connection
         .state
         .state
@@ -464,13 +455,23 @@ pub async fn handle_connection(
     let key =
         tokio_rustls::rustls::PrivateKey(peer_connection.state.state.lock().unwrap().get_key());
 
-    let conn_result = verify_connection(stream, certificate, key, peerids, connector).await;
+    log::info!("Verifying connection");
+    let conn_result = verify_connection(stream, certificate, key, peerids, server).await;
     if conn_result.is_err() {
+        log::error!(
+            "{}: Error establishing connection: {}",
+            peer_connection.get_name(),
+            conn_result.err().unwrap()
+        );
         return Err(PeerConnectionError::UnknownPeer);
     }
     let (tcpstream, peer_id) = conn_result.unwrap();
-    log::info!("Peer id: {:?}", peer_id);
+    log::info!("{}: Let's exchange hellos!", peer_connection.get_name());
+
+    log::info!("{}: Exchanged", peer_connection.get_name());
+    log::info!("{}: Peer id: {:?}", peer_connection.get_name(), peer_id);
     peer_connection.set_peer(peer_id);
+    log::info!("{}: we have flushed", peer_connection.get_name());
     let (mut rd, wr) = tokio::io::split(tcpstream);
     peer_connection.send_index().await?;
 

@@ -69,6 +69,7 @@ pub async fn send_hello(
         .write_all(&u32::to_be_bytes(hello.encoded_len() as u32))
         .await?;
     socket.write_all(&hello.encode_to_vec()).await?;
+    socket.flush().await?;
     Ok(())
 }
 
@@ -86,12 +87,4 @@ pub async fn receive_hello(
     }
 
     Ok(receive_message!(Hello, socket)?)
-}
-
-pub async fn exchange_hellos(
-    socket: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
-    name: String,
-) -> Result<Hello, PeerConnectionError> {
-    send_hello(socket, name).await?;
-    receive_hello(socket).await
 }

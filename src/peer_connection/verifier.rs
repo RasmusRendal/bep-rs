@@ -9,7 +9,7 @@ use tokio_rustls::rustls::server::*;
 use tokio_rustls::rustls::*;
 use tokio_rustls::TlsStream;
 
-const CONNECTION_TIMEOUT: Duration = Duration::from_millis(2000);
+const CONNECTION_TIMEOUT: Duration = Duration::from_millis(4000);
 
 pub struct BepVerifier {
     names: Vec<DistinguishedName>,
@@ -97,11 +97,11 @@ pub async fn verify_connection(
     certificate: Certificate,
     key: PrivateKey,
     peer_ids: Vec<Vec<u8>>,
-    connector: bool,
+    server: bool,
 ) -> tokio::io::Result<(TlsStream<impl AsyncWrite + AsyncRead>, Vec<u8>)> {
     let accepted_peer = Arc::new(Mutex::new(vec![]));
     let verifier = Arc::new(BepVerifier::new(peer_ids, accepted_peer.clone()));
-    if connector {
+    if !server {
         let config = tokio_rustls::rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_custom_certificate_verifier(verifier)

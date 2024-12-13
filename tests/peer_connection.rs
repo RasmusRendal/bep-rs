@@ -159,6 +159,7 @@ async fn test_close_nonpeer() -> io::Result<()> {
     let err = test_struct.connect().await;
 
     assert!(err.is_err());
+    log::info!("We got the error {}", err.clone().err().unwrap());
     assert!(matches!(
         err.err().unwrap(),
         PeerConnectionError::UnknownPeer

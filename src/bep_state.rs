@@ -64,10 +64,8 @@ impl BepState {
         if !s.is_initialized() {
             use crate::schema::device_options;
 
-            // TODO: Generate random name, maybe copy code from Docker or something
             use rcgen::generate_simple_self_signed;
-            let subject_alt_names =
-                vec!["hello.world.example".to_string(), "localhost".to_string()];
+            let subject_alt_names = vec!["syncthing".to_string()];
 
             let scert = generate_simple_self_signed(subject_alt_names).unwrap();
             let new_options = DeviceOption {

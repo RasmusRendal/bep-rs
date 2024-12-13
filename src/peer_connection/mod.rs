@@ -9,7 +9,8 @@ use crate::sync_directory::{SyncDirectory, SyncFile};
 use error::{PeerCommandError, PeerConnectionError};
 use handlers::{drain_requests, handle_connection};
 
-use futures::channel::oneshot;
+use core::time;
+use futures::channel::oneshot::{self, Canceled};
 use items::EncodableItem;
 use log;
 use rand::distributions::Standard;
@@ -20,6 +21,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Error, ErrorKind, Write};
 use std::sync::{Arc, OnceLock, RwLock};
+use std::thread;
 use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{channel, Sender, UnboundedSender};
@@ -266,7 +268,7 @@ impl PeerConnection {
             PeerRequestResponse::Error(e) => {
                 return Err(PeerCommandError::Other(format!(
                     "Received an error while getting file: {}",
-                    e.to_string()
+                    e
                 )));
             }
             PeerRequestResponse::Closed => {
@@ -387,7 +389,9 @@ impl PeerConnection {
         }
         match rx.await {
             Ok(_) => Ok(()),
-            Err(_) => {
+            Err(Canceled) => {
+                // TODO: Horrible hack to ensure we get our error
+                thread::sleep(time::Duration::from_millis(100));
                 self.has_error()?;
                 Err(PeerConnectionError::Other("Unknown error".to_string()))
             }
