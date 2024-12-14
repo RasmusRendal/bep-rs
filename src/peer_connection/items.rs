@@ -65,7 +65,7 @@ pub async fn send_hello(
 
     let hello = Hello {
         device_name: name,
-        client_name: "beercan".to_string(),
+        client_name: "bep.rs".to_string(),
         client_version: "0.1".to_string(),
         num_connections: 1,
         timestamp: SystemTime::now()
