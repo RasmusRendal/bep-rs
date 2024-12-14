@@ -11,6 +11,7 @@ use std::io::{self, BufReader, Read};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::mpsc::{Receiver, UnboundedReceiver};
+use tokio::time::error::Elapsed;
 
 /// Call this function when the client has indicated it want to send a Request
 /// At the moment, it always responds with a hardcoded file
@@ -223,8 +224,8 @@ async fn handle_reading(
 
     loop {
         log::info!("{}: Waiting for a new message", peer_connection.get_name());
-        let header_len = tokio::time::timeout(Duration::from_millis(1000 * 30), stream.read_u16())
-            .await?? as usize;
+        let header_len =
+            tokio::time::timeout(Duration::from_secs(120), stream.read_u16()).await?? as usize;
         log::info!(
             "{}: Got a header length {}",
             peer_connection.get_name(),
@@ -415,22 +416,33 @@ async fn handle_writing(
     )
     .await?;
 
-    while let Some((msg, tx)) = rx.recv().await {
-        if !msg.is_empty() {
-            write_message(&mut wr, &mut peer_connection, &mut rx, &msg).await?;
-        }
-        if let Some(tx) = tx {
-            let r = tx.send(PeerRequestResponse::Sent);
-            if let Err(_e) = r {
-                log::error!(
-                    "{}: Got error when sending response:",
-                    peer_connection.get_name()
-                );
+    loop {
+        match tokio::time::timeout(Duration::from_secs(90), rx.recv()).await {
+            Ok(Some((msg, tx))) => {
+                if !msg.is_empty() {
+                    write_message(&mut wr, &mut peer_connection, &mut rx, &msg).await?;
+                }
+                if let Some(tx) = tx {
+                    let r = tx.send(PeerRequestResponse::Sent);
+                    if let Err(_e) = r {
+                        log::error!(
+                            "{}: Got error when sending response:",
+                            peer_connection.get_name()
+                        );
+                    }
+                }
+            }
+            Ok(None) => {
+                close_receiver(&mut rx).await;
+                return Ok(());
+            }
+            Err(Elapsed { .. }) => {
+                let msg = items::Ping {};
+                let msg = msg.encode_for_bep();
+                write_message(&mut wr, &mut peer_connection, &mut rx, &msg).await?;
             }
         }
     }
-    close_receiver(&mut rx).await;
-    Ok(())
 }
 
 pub fn drain_requests(peer_connection: &PeerConnection) {

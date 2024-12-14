@@ -7,8 +7,8 @@ Currently it supports syncing folders consisting only small files, smaller than 
  - [X] Authenticated by TLS
  - [X] Send an index of files in a directory
  - [X] Synchronize single files
- - [ ] Send the cluster config
- - [ ] Send a continuous ping, to keep connection open
+ - [X] Send the cluster config
+ - [X] Send a continuous ping, to keep connection open
  - [ ] Split files up into blocks
  - [ ] Support compressed messages
  - [ ] Support compressed files/metadata
