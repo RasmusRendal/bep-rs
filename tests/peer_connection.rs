@@ -142,6 +142,8 @@ async fn test_double_close_err() -> io::Result<()> {
     let _ = test_struct.peer();
     let (connection1, connection2) = test_struct.connect().await.unwrap();
 
+    log::info!("we have connected");
+
     connection1.close().await?;
     log::info!("test_double_close_err: Close 1 completed");
     connection2.close().await?;

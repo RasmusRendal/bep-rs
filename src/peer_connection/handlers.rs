@@ -281,6 +281,9 @@ async fn handle_reading(
                 close.reason
             );
             return Ok(());
+        } else if header.r#type == items::MessageType::Ping as i32 {
+            let _ = receive_message!(items::Ping, stream)?;
+            log::info!("{}: Received a ping", peer_connection.get_name());
         } else if header.r#type == items::MessageType::ClusterConfig as i32 {
             let _cluster_config = receive_message!(items::ClusterConfig, stream)?;
             log::info!("{}: We have received a cluster config. Your peer might have folders or other peers to share with you", peer_connection.get_name());
@@ -319,6 +322,21 @@ async fn close_receiver(
 
 async fn generate_cluster_config(peer_connection: &mut PeerConnection) -> items::ClusterConfig {
     let peer_id = peer_connection.get_peer().unwrap().id.unwrap();
+    let myself = {
+        let mut state = peer_connection.state.state.lock().unwrap();
+        items::Device {
+            id: state.get_certificate(),
+            name: state.get_name(),
+            addresses: Vec::new(),
+            compression: 1,
+            cert_name: "".to_string(),
+            max_sequence: 0,
+            introducer: false,
+            index_id: 0,
+            skip_introduction_removals: true,
+            encryption_password_token: Vec::new(),
+        }
+    };
     items::ClusterConfig {
         folders: peer_connection
             .state
@@ -327,15 +345,8 @@ async fn generate_cluster_config(peer_connection: &mut PeerConnection) -> items:
             .unwrap()
             .get_synced_directories(peer_id)
             .into_iter()
-            .map(|(dir, peers)| items::Folder {
-                id: dir.id,
-                label: dir.label,
-                read_only: false,
-                ignore_permissions: false,
-                ignore_delete: false,
-                disable_temp_indexes: true,
-                paused: false,
-                devices: peers
+            .map(|(dir, peers)| {
+                let mut peers: Vec<items::Device> = peers
                     .into_iter()
                     .map(|peer| items::Device {
                         id: peer.device_id.unwrap(),
@@ -349,9 +360,22 @@ async fn generate_cluster_config(peer_connection: &mut PeerConnection) -> items:
                         skip_introduction_removals: true,
                         encryption_password_token: Vec::new(),
                     })
-                    .collect(),
+                    .collect();
+                peers.push(myself.clone());
+
+                items::Folder {
+                    id: dir.id,
+                    label: dir.label,
+                    read_only: false,
+                    ignore_permissions: false,
+                    ignore_delete: false,
+                    disable_temp_indexes: true,
+                    paused: false,
+                    devices: peers,
+                }
             })
             .collect(),
+        secondary: false,
     }
 }
 
@@ -370,7 +394,6 @@ async fn write_message(
         return Err(e);
     }
     wr.flush().await?;
-    log::info!("{}: Wrote message {:?}", peer_connection.get_name(), msg);
     Ok(())
 }
 
@@ -382,15 +405,8 @@ async fn handle_writing(
     items::send_hello(&mut wr, peer_connection.get_name())
         .await
         .unwrap();
-    log::info!("Generating the cluster config");
-    let cluster_config = generate_cluster_config(&mut peer_connection).await;
-    log::info!(
-        "{}: The cluster config is {:?}",
-        peer_connection.get_name(),
-        cluster_config
-    );
-    log::info!("Sending the cluster config");
 
+    let cluster_config = generate_cluster_config(&mut peer_connection).await;
     write_message(
         &mut wr,
         &mut peer_connection,
@@ -466,15 +482,11 @@ pub async fn handle_connection(
         return Err(PeerConnectionError::UnknownPeer);
     }
     let (tcpstream, peer_id) = conn_result.unwrap();
-    log::info!("{}: Let's exchange hellos!", peer_connection.get_name());
-
-    log::info!("{}: Exchanged", peer_connection.get_name());
     log::info!("{}: Peer id: {:?}", peer_connection.get_name(), peer_id);
     peer_connection.set_peer(peer_id);
-    log::info!("{}: we have flushed", peer_connection.get_name());
     let (mut rd, wr) = tokio::io::split(tcpstream);
-    peer_connection.send_index().await?;
 
+    peer_connection.send_index().await?;
     let name = peer_connection.get_name();
     let sendclone = peer_connection.shutdown_send.clone();
     let peer_connectionclone = peer_connection.clone();

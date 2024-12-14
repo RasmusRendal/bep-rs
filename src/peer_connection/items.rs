@@ -1,9 +1,11 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use prost::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::PeerConnectionError;
 
-include!(concat!(env!("OUT_DIR"), "/bep_rs.items.rs"));
+include!(concat!(env!("OUT_DIR"), "/bep.items.rs"));
 
 const HELLO_MAGIC: u32 = 0x2EA7D90B_u32;
 
@@ -36,6 +38,7 @@ implement!(Request);
 implement!(Response);
 implement!(Index);
 implement!(ClusterConfig);
+implement!(Ping);
 
 /// Given a stream, read a four-byte length, and then
 /// the message
@@ -64,9 +67,14 @@ pub async fn send_hello(
         device_name: name,
         client_name: "beercan".to_string(),
         client_version: "0.1".to_string(),
+        num_connections: 1,
+        timestamp: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
     };
     socket
-        .write_all(&u32::to_be_bytes(hello.encoded_len() as u32))
+        .write_all(&u16::to_be_bytes(hello.encoded_len() as u16))
         .await?;
     socket.write_all(&hello.encode_to_vec()).await?;
     socket.flush().await?;
@@ -86,5 +94,8 @@ pub async fn receive_hello(
         return Err(PeerConnectionError::InvalidMagicBytes);
     }
 
-    Ok(receive_message!(Hello, socket)?)
+    let hello_len = socket.read_u16().await? as usize;
+    let mut message_buffer = vec![0u8; hello_len];
+    socket.read_exact(&mut message_buffer).await?;
+    Ok(Hello::decode(&*message_buffer)?)
 }
