@@ -182,8 +182,16 @@ impl PeerConnection {
                                 })
                                 .collect(),
                             symlink_target: "".to_string(),
+                            blocks_hash: Vec::new(),
+                            encrypted: Vec::new(),
+                            platform: None,
+                            local_flags: 0,
+                            version_hash: Vec::new(),
+                            inode_change_ns: 0,
+                            encryption_trailer_size: 0,
                         })
                         .collect(),
+                    last_sequence: 0,
                 };
                 log::info!("{}: Sending index: {:?}", self.get_name(), index);
                 self.submit_message(index.encode_for_bep()).await;
@@ -214,6 +222,8 @@ impl PeerConnection {
             size: 8,
             hash: sync_file.hash.clone(),
             from_temporary: false,
+            weak_hash: 0,
+            block_no: 0,
         };
 
         log::info!("Submitting file request");
