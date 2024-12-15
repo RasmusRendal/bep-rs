@@ -102,11 +102,12 @@ pub async fn verify_connection(
     let accepted_peer = Arc::new(Mutex::new(vec![]));
     let verifier = Arc::new(BepVerifier::new(peer_ids, accepted_peer.clone()));
     if !server {
-        let config = tokio_rustls::rustls::ClientConfig::builder()
+        let mut config = tokio_rustls::rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_custom_certificate_verifier(verifier)
             .with_client_auth_cert(vec![certificate.clone()], key.clone())
             .unwrap();
+        config.alpn_protocols = vec![b"bep/1.0".to_vec()];
 
         let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
 
@@ -121,11 +122,12 @@ pub async fn verify_connection(
         .await?;
         Ok((clientstream?.into(), accepted_peer.lock().unwrap().clone()))
     } else {
-        let config = tokio_rustls::rustls::ServerConfig::builder()
+        let mut config = tokio_rustls::rustls::ServerConfig::builder()
             .with_safe_defaults()
             .with_client_cert_verifier(verifier)
             .with_single_cert(vec![certificate.clone()], key.clone())
             .unwrap();
+        config.alpn_protocols = vec![b"bep/1.0".to_vec()];
 
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
         let serverstream = timeout(
