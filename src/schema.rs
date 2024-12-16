@@ -34,6 +34,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    sync_file_blocks (id) {
+        id -> Nullable<Integer>,
+        sync_file_id -> Integer,
+        offset -> BigInt,
+        size -> Integer,
+        hash -> Binary,
+        weak_hash -> BigInt,
+    }
+}
+
+diesel::table! {
     sync_file_versions (id) {
         id -> Nullable<Integer>,
         version_id -> BigInt,
@@ -65,6 +76,7 @@ diesel::table! {
 diesel::joinable!(folder_shares -> peers (peer_id));
 diesel::joinable!(folder_shares -> sync_folders (sync_folder_id));
 diesel::joinable!(peer_addresses -> peers (peer_id));
+diesel::joinable!(sync_file_blocks -> sync_files (sync_file_id));
 diesel::joinable!(sync_files -> sync_folders (folder_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
@@ -72,6 +84,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     folder_shares,
     peer_addresses,
     peers,
+    sync_file_blocks,
     sync_file_versions,
     sync_files,
     sync_folders,

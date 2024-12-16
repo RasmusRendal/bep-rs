@@ -8,8 +8,8 @@ use std::time::SystemTime;
 /// A block of a file
 #[derive(Clone)]
 pub struct SyncBlock {
-    pub offset: u64,
-    pub size: u32,
+    pub offset: i64,
+    pub size: i32,
     pub hash: Vec<u8>,
 }
 
@@ -22,6 +22,7 @@ pub struct SyncFile {
     pub modified_by: u64,
     pub synced_version: u64,
     pub versions: Vec<(u64, u64)>,
+    pub blocks: Vec<SyncBlock>,
 }
 
 /// A directory that we should be syncing
@@ -47,7 +48,6 @@ fn comp_hashes(h1: &[u8], h2: &[u8]) -> bool {
 impl SyncDirectory {
     pub async fn generate_index(&self, state: &BepStateRef) -> Vec<SyncFile> {
         // TODO: Handle errors in some manner
-        let mut changed = false;
         let short_id = state.state.lock().unwrap().get_short_id();
         let path = self.path.clone();
         let mut files = state.state.lock().unwrap().get_sync_files(&self.id);
@@ -72,24 +72,27 @@ impl SyncDirectory {
                             .lock()
                             .unwrap()
                             .update_sync_file(self, index_file);
-                        changed = true;
                     }
                 }
                 None => {
                     files.push(SyncFile {
                         id: None,
                         path: file.path().clone(),
-                        hash,
+                        hash: hash.clone(),
                         modified_by: short_id,
                         synced_version: 1,
                         versions: vec![(short_id, 1)],
+                        blocks: vec![SyncBlock {
+                            offset: 0,
+                            size: data.len() as i32,
+                            hash,
+                        }],
                     });
                     state
                         .state
                         .lock()
                         .unwrap()
                         .update_sync_file(self, files.last().unwrap());
-                    changed = true;
                 }
             }
         }
@@ -98,50 +101,17 @@ impl SyncDirectory {
             assert!(!file.versions.is_empty());
         }
 
-        if changed {
-            /*
-            let tasks: Vec<_> = state.state.lock().unwrap().listeners.iter_mut().map(|l| l.clone()).map(|mut l| l.directory_updated(self)).collect();
-            for task in tasks {
-                task.await;
-            }
-            */
-            for connection in &mut state.state.lock().unwrap().listeners {
-                let mut cl = connection.clone();
-                let d = self.clone();
-                tokio::spawn(async move {
-                    cl.directory_updated(&d).await;
-                });
-            }
-        }
         files
     }
 
     pub async fn get_index(&self, state: BepStateRef) -> Vec<SyncFile> {
-        let files = state.state.lock().unwrap().get_sync_files(&self.id);
-        files
-            .into_iter()
-            .map(|f| SyncFile {
-                id: f.id,
-                path: f.path,
-                hash: f.hash,
-                modified_by: f.modified_by,
-                synced_version: f.synced_version,
-                versions: f.versions,
-            })
-            .collect()
+        state.state.lock().unwrap().get_sync_files(&self.id)
     }
 }
 
 impl SyncFile {
-    pub fn get_blocks(&self) -> Vec<SyncBlock> {
+    pub fn gen_blocks(&self) -> Vec<SyncBlock> {
         let path = self.path.clone();
-        if !path.is_file() {
-            return vec![SyncBlock {
-                offset: 0,
-                size: 6,
-                hash: vec![],
-            }];
-        }
         let h = File::open(path).unwrap();
         let len = h.metadata().unwrap().len() as u32;
         // Here we may use only one block.
@@ -149,7 +119,7 @@ impl SyncFile {
         assert!(len < 1024 * 1024 * 16);
         let block = SyncBlock {
             offset: 0,
-            size: len,
+            size: len as i32,
             hash: self.hash.clone(),
         };
         vec![block]
@@ -176,9 +146,7 @@ impl SyncFile {
     }
 
     pub fn get_size(&self) -> u64 {
-        self.get_blocks()
-            .iter()
-            .fold(0, |acc, b| acc + (b.size as u64))
+        self.blocks.iter().fold(0, |acc, b| acc + (b.size as u64))
     }
 
     pub fn get_name(&self, directory: &SyncDirectory) -> String {
@@ -246,6 +214,11 @@ mod tests {
             modified_by: 0,
             synced_version: 0,
             versions: vec![(1, 1)],
+            blocks: vec![SyncBlock {
+                offset: 0,
+                size: 0,
+                hash: vec![],
+            }],
         };
 
         assert!(file.get_name(&directory) == "somefile");

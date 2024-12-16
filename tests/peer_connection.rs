@@ -2,6 +2,7 @@ use bep_rs::bep_state::BepState;
 use bep_rs::bep_state_reference::BepStateRef;
 use bep_rs::models::Peer;
 use bep_rs::peer_connection::*;
+use bep_rs::sync_directory::SyncBlock;
 use bep_rs::sync_directory::SyncDirectory;
 use bep_rs::sync_directory::SyncFile;
 use error::PeerCommandError;
@@ -16,6 +17,7 @@ use tokio::io;
 
 const FILE_CONTENTS: &str = "hello world";
 const FILE_CONTENTS2: &str = "hello other world";
+const FILE_SIZE1: i32 = FILE_CONTENTS.len() as i32;
 const FILE_NAME: &str = "testfile";
 const FILE_HASH: &[u8] = b"\xb9\x4d\x27\xb9\x93\x4d\x3e\x08\xa5\x2e\x52\xd7\xda\x7d\xab\xfa\xc4\x84\xef\xe3\x7a\x53\x80\xee\x90\x88\xf7\xac\xe2\xef\xcd\xe9";
 
@@ -190,6 +192,11 @@ async fn test_get_nonexistent_file() -> io::Result<()> {
         modified_by: 0,
         synced_version: 0,
         versions: vec![(1, 1)],
+        blocks: vec![SyncBlock {
+            offset: 0,
+            size: FILE_SIZE1,
+            hash: vec![],
+        }],
     };
 
     log::info!("Getting file");
@@ -227,6 +234,11 @@ async fn test_get_file() -> io::Result<()> {
         modified_by: 0,
         synced_version: 0,
         versions: vec![(1, 1)],
+        blocks: vec![SyncBlock {
+            offset: 0,
+            size: FILE_SIZE1,
+            hash: vec![],
+        }],
     };
 
     connection1.wait_for_ready().await.unwrap();
@@ -267,6 +279,11 @@ async fn test_nonsynced_directory() -> io::Result<()> {
         modified_by: 0,
         synced_version: 0,
         versions: vec![(1, 1)],
+        blocks: vec![SyncBlock {
+            offset: 0,
+            size: FILE_SIZE1,
+            hash: vec![],
+        }],
     };
 
     let e = connection1
@@ -384,16 +401,16 @@ async fn test_update_file() -> io::Result<()> {
         .generate_index(&test_struct.state2)
         .await;
 
-    log::info!("Successfully generated second index");
-    thread::sleep(time::Duration::from_millis(200));
+    connection2
+        .directory_updated(test_struct.peer1dir.as_ref().unwrap())
+        .await;
 
     // And then we request the file we just overwrote
     // However, requesting this file shouldn't overwrite it in dstdir,
     // because the change we just did is newer than the index in state2
-    connection1
-        .get_directory(test_struct.peer1dir.as_ref().unwrap())
-        .await
-        .unwrap();
+
+    log::info!("Successfully generated second index");
+    thread::sleep(time::Duration::from_millis(200));
 
     let mut dstfile = test_struct.peer1dirpath.clone();
     dstfile.push(FILE_NAME);

@@ -1,3 +1,5 @@
+use crate::sync_directory::SyncBlock;
+
 use super::items::{self, EncodableItem};
 use super::verifier::verify_connection;
 use super::{PeerConnection, PeerRequestResponse, PeerRequestResponseType};
@@ -71,7 +73,7 @@ async fn handle_request(
     buf_reader.read_to_end(&mut data)?;
 
     let hash = digest::digest(&digest::SHA256, &data);
-    let response = if hash.as_ref() != request.hash {
+    let response = if !request.hash.is_empty() && (hash.as_ref() != request.hash) {
         log::error!("Request hash: {:?}", request.hash);
         log::error!("Real hash {:?}", hash.as_ref());
         log::error!("Peer requested file, but with invalid hash");
@@ -167,6 +169,15 @@ async fn handle_index(
                 .map(|x| (x.id, x.value))
                 .collect();
             localfile.hash = file.blocks[0].hash.clone();
+            localfile.blocks = file
+                .blocks
+                .into_iter()
+                .map(|b| SyncBlock {
+                    offset: b.offset,
+                    size: b.size,
+                    hash: b.hash,
+                })
+                .collect();
             localfile.modified_by = file.modified_by;
             peer_connection
                 .state
@@ -188,6 +199,15 @@ async fn handle_index(
                     .counters
                     .into_iter()
                     .map(|x| (x.id, x.value))
+                    .collect(),
+                blocks: file
+                    .blocks
+                    .into_iter()
+                    .map(|b| SyncBlock {
+                        offset: b.offset,
+                        size: b.size,
+                        hash: b.hash,
+                    })
                     .collect(),
             };
             peer_connection
@@ -458,7 +478,7 @@ pub fn drain_requests(peer_connection: &PeerConnection) {
 /// it simply adds is to the tx queue
 pub async fn handle_connection(
     stream: (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
-    mut peer_connection: PeerConnection,
+    peer_connection: PeerConnection,
     rx: Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
     mut shutdown_recv: UnboundedReceiver<()>,
     server: bool,

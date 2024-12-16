@@ -61,3 +61,14 @@ pub struct SyncFileVersion {
     pub user_id: i64,
     pub sync_file_id: i32,
 }
+
+#[derive(Queryable, Insertable)]
+#[diesel(belongs_to(SyncFile))]
+pub struct SyncFileBlock {
+    pub id: Option<i32>,
+    pub sync_file_id: i32,
+    pub offset: i64,
+    pub size: i32,
+    pub hash: Vec<u8>,
+    pub weak_hash: i64,
+}

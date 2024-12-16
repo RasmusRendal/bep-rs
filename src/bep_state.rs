@@ -151,6 +151,23 @@ impl BepState {
             .collect::<Vec<(u64, u64)>>()
     }
 
+    pub fn get_blocks(&mut self, file_id: i32) -> Vec<sync_directory::SyncBlock> {
+        use super::schema::sync_file_blocks::dsl::*;
+
+        sync_file_blocks
+            .filter(sync_file_id.eq(file_id))
+            .order(offset.asc())
+            .load::<SyncFileBlock>(&mut self.connection)
+            .unwrap()
+            .into_iter()
+            .map(|b| sync_directory::SyncBlock {
+                offset: b.offset,
+                size: b.size,
+                hash: b.hash,
+            })
+            .collect()
+    }
+
     pub fn get_sync_files(&mut self, dir_id: &String) -> Vec<sync_directory::SyncFile> {
         use super::schema::sync_files::dsl::*;
         let dir = self.get_sync_directory(dir_id).unwrap();
@@ -169,6 +186,7 @@ impl BepState {
                     modified_by: from_i64(x.modified_by),
                     synced_version: from_i64(x.synced_version_id),
                     versions: self.get_versions(x.id.unwrap()),
+                    blocks: self.get_blocks(x.id.unwrap()),
                 };
                 assert!(!dir.versions.is_empty());
                 dir
@@ -181,8 +199,11 @@ impl BepState {
         dir: &sync_directory::SyncDirectory,
         file: &sync_directory::SyncFile,
     ) {
+        use super::schema::sync_file_blocks;
+        use super::schema::sync_file_blocks::dsl::*;
         use super::schema::sync_file_versions;
         use super::schema::sync_files;
+
         assert!(!file.versions.is_empty());
         let sync_file = SyncFile {
             id: file.id,
@@ -229,6 +250,31 @@ impl BepState {
                 .execute(&mut self.connection)
                 .unwrap();
         }
+
+        if !file.blocks.is_empty() {
+            diesel::delete(sync_file_blocks.filter(sync_file_id.eq(inserted)))
+                .execute(&mut self.connection)
+                .unwrap();
+
+            diesel::insert_into(sync_file_blocks::table)
+                .values(
+                    file.blocks
+                        .clone()
+                        .into_iter()
+                        .map(|b| SyncFileBlock {
+                            id: None,
+                            sync_file_id: inserted,
+                            offset: b.offset,
+                            size: b.size,
+                            hash: b.hash,
+                            weak_hash: 0,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .execute(&mut self.connection)
+                .unwrap();
+        }
+
         assert!(!self.get_versions(inserted).is_empty());
     }
 

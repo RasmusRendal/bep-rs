@@ -44,6 +44,16 @@ CREATE TABLE sync_files (
     FOREIGN KEY (folder_id) REFERENCES sync_folders(id)
 );
 
+CREATE TABLE sync_file_blocks (
+    id INTEGER PRIMARY KEY,
+    sync_file_id INTEGER NOT NULL,
+    offset BIGINT NOT NULL,
+    size INTEGER NOT NULL,
+    hash BLOB NOT NULL,
+    weak_hash BIGINT NOT NULL,
+    FOREIGN KEY (sync_file_id) REFERENCES sync_files(id)
+);
+
 /* The version_id should be incrementing for each individual sync_file
    The regular id is just for the benefit of sqlite */
 CREATE TABLE sync_file_versions (

@@ -22,7 +22,6 @@ use std::fs::File;
 use std::io::{self, Error, ErrorKind, Write};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::thread;
-use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{channel, Sender, UnboundedSender};
 
@@ -127,7 +126,7 @@ impl PeerConnection {
         peer_connectionc
     }
 
-    pub async fn send_index(&mut self) -> io::Result<()> {
+    pub async fn send_index(&self) -> io::Result<()> {
         if let Some(peer) = self.get_peer() {
             let directories = self.state.get_sync_directories().await;
             for dir in directories {
@@ -137,7 +136,7 @@ impl PeerConnection {
                 let index = items::Index {
                     folder: dir.id.clone(),
                     files: dir
-                        .get_index(self.state.clone())
+                        .generate_index(&self.state)
                         .await
                         .iter()
                         .map(|x| items::FileInfo {
@@ -164,7 +163,7 @@ impl PeerConnection {
                             sequence: 1,
                             block_size: x.get_size() as i32,
                             blocks: x
-                                .get_blocks()
+                                .gen_blocks()
                                 .iter()
                                 .map(|y| items::BlockInfo {
                                     offset: 0,
@@ -203,6 +202,16 @@ impl PeerConnection {
     ) -> Result<(), PeerCommandError> {
         let message_id = StdRng::from_entropy().sample(Standard);
 
+        if sync_file.blocks.len() == 0 {
+            return Err(PeerCommandError::Other(
+                "File object has no blocks".to_string(),
+            ));
+        } else if sync_file.blocks.len() != 1 {
+            return Err(PeerCommandError::Other(
+                "Multi-block files are unsupported :/".to_string(),
+            ));
+        }
+        let block = &sync_file.blocks[0];
         let name = sync_file.get_name(directory);
 
         // TODO: Support bigger files
@@ -211,8 +220,8 @@ impl PeerConnection {
             folder: directory.id.clone(),
             name,
             offset: 0,
-            size: 8,
-            hash: sync_file.hash.clone(),
+            size: block.size,
+            hash: block.hash.clone(),
             from_temporary: false,
             weak_hash: 0,
             block_no: 0,
@@ -291,6 +300,7 @@ impl PeerConnection {
 
         for file in &index {
             if file.synced_version < file.get_index_version() {
+                log::info!("{}: we want a file {:?}", self.get_name(), file.path);
                 self.get_file(directory, file).await?;
             }
         }
@@ -422,7 +432,8 @@ impl PeerConnection {
         Ok(())
     }
 
-    pub async fn directory_updated(&mut self, directory: &SyncDirectory) {
+    pub async fn directory_updated(&self, directory: &SyncDirectory) {
+        directory.generate_index(&self.state).await;
         let mut synced_index_updated = false;
         if let Some(peer) = self.get_peer() {
             if let Some(directory) = self.state.get_sync_directory(&directory.id.clone()).await {
