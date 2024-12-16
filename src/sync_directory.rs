@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 /// A block of a file
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SyncBlock {
     pub offset: i64,
     pub size: i32,
@@ -14,7 +14,7 @@ pub struct SyncBlock {
 }
 
 /// A file that we should be syncing
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SyncFile {
     pub id: Option<i32>,
     pub path: PathBuf,
@@ -26,7 +26,7 @@ pub struct SyncFile {
 }
 
 /// A directory that we should be syncing
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SyncDirectory {
     pub id: String,
     pub label: String,
@@ -50,14 +50,15 @@ impl SyncDirectory {
         // TODO: Handle errors in some manner
         let short_id = state.state.lock().unwrap().get_short_id();
         let path = self.path.clone();
-        let mut files = state.state.lock().unwrap().get_sync_files(&self.id);
+        let mut sync_files = state.state.lock().unwrap().get_sync_files(&self.id);
+        let mut out_files: Vec<SyncFile> = Vec::new();
         for file in path.read_dir().unwrap().flatten() {
             let mut buf_reader = BufReader::new(File::open(file.path()).unwrap());
             let mut data = Vec::new();
             buf_reader.read_to_end(&mut data).unwrap();
             let hash = digest::digest(&digest::SHA256, &data).as_ref().to_vec();
 
-            match files.iter_mut().find(|x| x.path == file.path()) {
+            match sync_files.iter_mut().find(|x| x.path == file.path()) {
                 Some(index_file) => {
                     assert!(!index_file.versions.is_empty());
                     if index_file.versions.last().unwrap().1 == index_file.synced_version
@@ -73,9 +74,10 @@ impl SyncDirectory {
                             .unwrap()
                             .update_sync_file(self, index_file);
                     }
+                    out_files.push(index_file.clone());
                 }
                 None => {
-                    files.push(SyncFile {
+                    out_files.push(SyncFile {
                         id: None,
                         path: file.path().clone(),
                         hash: hash.clone(),
@@ -92,16 +94,16 @@ impl SyncDirectory {
                         .state
                         .lock()
                         .unwrap()
-                        .update_sync_file(self, files.last().unwrap());
+                        .update_sync_file(self, out_files.last().unwrap());
                 }
             }
         }
 
-        for file in &files {
+        for file in &out_files {
             assert!(!file.versions.is_empty());
         }
 
-        files
+        out_files
     }
 
     pub async fn get_index(&self, state: BepStateRef) -> Vec<SyncFile> {

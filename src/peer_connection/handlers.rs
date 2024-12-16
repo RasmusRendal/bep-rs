@@ -132,17 +132,18 @@ async fn handle_response(
 }
 
 async fn handle_index(
-    index: items::Index,
+    folder: String,
+    files: Vec<items::FileInfo>,
     peer_connection: PeerConnection,
 ) -> tokio::io::Result<()> {
     log::info!("{}: Handling index", peer_connection.get_name());
     let syncdir = peer_connection
         .state
-        .get_sync_directory(&index.folder)
+        .get_sync_directory(&folder)
         .await
         .unwrap();
     let mut localindex = syncdir.get_index(peer_connection.state.clone()).await;
-    for file in index.files {
+    for file in files {
         log::info!(
             "{}: Handling index file {}",
             peer_connection.get_name(),
@@ -279,7 +280,20 @@ async fn handle_reading(
             let index = receive_message!(items::Index, stream)?;
             let peer_connectionc = peer_connection.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_index(index, peer_connectionc.clone()).await {
+                if let Err(e) =
+                    handle_index(index.folder, index.files, peer_connectionc.clone()).await
+                {
+                    log::error!("Received an error when handling index: {}", e);
+                    let _ = peer_connectionc.close_err(&e).await;
+                }
+            });
+        } else if header.r#type == items::MessageType::IndexUpdate as i32 {
+            let index = receive_message!(items::IndexUpdate, stream)?;
+            let peer_connectionc = peer_connection.clone();
+            tokio::spawn(async move {
+                if let Err(e) =
+                    handle_index(index.folder, index.files, peer_connectionc.clone()).await
+                {
                     log::error!("Received an error when handling index: {}", e);
                     let _ = peer_connectionc.close_err(&e).await;
                 }
