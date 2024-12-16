@@ -326,7 +326,7 @@ async fn generate_cluster_config(peer_connection: &mut PeerConnection) -> items:
     let myself = {
         let mut state = peer_connection.state.state.lock().unwrap();
         items::Device {
-            id: state.get_certificate(),
+            id: state.get_id().to_vec(),
             name: state.get_name(),
             addresses: Vec::new(),
             compression: 1,

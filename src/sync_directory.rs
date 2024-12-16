@@ -3,6 +3,7 @@ use ring::digest;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 /// A block of a file
 #[derive(Clone)]
@@ -134,6 +135,13 @@ impl SyncDirectory {
 impl SyncFile {
     pub fn get_blocks(&self) -> Vec<SyncBlock> {
         let path = self.path.clone();
+        if !path.is_file() {
+            return vec![SyncBlock {
+                offset: 0,
+                size: 6,
+                hash: vec![],
+            }];
+        }
         let h = File::open(path).unwrap();
         let len = h.metadata().unwrap().len() as u32;
         // Here we may use only one block.
@@ -151,6 +159,19 @@ impl SyncFile {
         match self.versions.last() {
             Some(v) => v.1,
             None => 1,
+        }
+    }
+
+    pub fn modified_s(&self) -> i64 {
+        if self.path.is_file() {
+            self.path
+                .metadata()
+                .unwrap()
+                .modified()
+                .map(|x| x.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as i64)
+                .unwrap_or(-1)
+        } else {
+            -1
         }
     }
 

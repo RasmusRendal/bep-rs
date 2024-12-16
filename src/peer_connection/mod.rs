@@ -145,15 +145,7 @@ impl PeerConnection {
                             r#type: items::FileInfoType::File as i32,
                             size: x.get_size() as i64,
                             permissions: 0,
-                            modified_s: x
-                                .path
-                                .metadata()
-                                .unwrap()
-                                .modified()
-                                .unwrap()
-                                .duration_since(SystemTime::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs() as i64,
+                            modified_s: x.modified_s(),
                             modified_ns: 0,
                             modified_by: 0,
                             deleted: false,
