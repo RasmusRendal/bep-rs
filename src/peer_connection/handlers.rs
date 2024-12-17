@@ -12,7 +12,7 @@ use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::sync::mpsc::{Receiver, UnboundedReceiver};
+use tokio::sync::mpsc::Receiver;
 use tokio::time::error::Elapsed;
 use tokio_util::sync::CancellationToken;
 

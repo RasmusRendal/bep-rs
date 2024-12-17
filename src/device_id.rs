@@ -4,12 +4,12 @@ use data_encoding::BASE32_NOPAD;
 const LUHN32: &[u8] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".as_bytes();
 
 fn codepoint32(c: char) -> usize {
-    if 'A' <= c && c <= 'Z' {
-        return (c as usize) - ('A' as usize);
-    } else if '2' <= c && c <= '7' {
-        return (c as usize) + 26 - ('2' as usize);
+    if c.is_ascii_uppercase() {
+        (c as usize) - ('A' as usize)
+    } else if ('2'..='7').contains(&c) {
+        (c as usize) + 26 - ('2' as usize)
     } else {
-        panic!("no bueno");
+        panic!("no bueno")
     }
 }
 

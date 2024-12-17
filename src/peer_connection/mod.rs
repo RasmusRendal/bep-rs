@@ -20,11 +20,11 @@ use rand::{Rng, SeedableRng};
 use ring::digest;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Error, ErrorKind, Write};
+use std::io::{self, Error, Write};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::thread;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::mpsc::{channel, Sender, UnboundedSender};
+use tokio::sync::mpsc::{channel, Sender};
 use tokio_util::task::TaskTracker;
 
 #[derive(Copy, Clone, PartialEq)]
@@ -171,7 +171,7 @@ impl PeerConnection {
                                 .iter()
                                 .map(|y| items::BlockInfo {
                                     offset: 0,
-                                    size: y.size as i32,
+                                    size: y.size,
                                     hash: y.hash.clone(),
                                     weak_hash: 0,
                                 })
@@ -206,7 +206,7 @@ impl PeerConnection {
     ) -> Result<(), PeerCommandError> {
         let message_id = StdRng::from_entropy().sample(Standard);
 
-        if sync_file.blocks.len() == 0 {
+        if sync_file.blocks.is_empty() {
             return Err(PeerCommandError::Other(
                 "File object has no blocks".to_string(),
             ));
