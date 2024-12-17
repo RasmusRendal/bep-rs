@@ -19,9 +19,10 @@ console-subscriber = "0.1.8"
 tempfile = "3.4.0"
 ring = "0.16.20"
 rcgen = "0.10.0"
-tokio-rustls = { version = "0.24.0", features = [ "dangerous_configuration"] }
+tokio-rustls = { version = "0.24.0", features = ["dangerous_configuration"] }
 thiserror = "2.0.6"
 data-encoding = "2.6.0"
+tokio-util = { version = "0.7.13", features = ["rt"] }
 
 [build-dependencies]
 prost-build = "0.11"

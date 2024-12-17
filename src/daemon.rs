@@ -1,9 +1,9 @@
 use crate::bep_state_reference::BepStateRef;
+use crate::peer_connection::error::PeerConnectionError;
 
 use super::models::Peer;
 use log;
 use std::error::Error;
-use std::io;
 use std::{thread, time};
 
 use tokio::net::TcpStream;
@@ -15,7 +15,7 @@ pub struct Daemon {
 }
 
 /// Try and connect to the server at addr
-async fn connect_to_server(state: BepStateRef, addr: String) -> io::Result<()> {
+async fn connect_to_server(state: BepStateRef, addr: String) -> Result<(), PeerConnectionError> {
     log::info!(target: "Daemon", "");
     log::info!(target: "Daemon", "Connecting to {addr}");
 

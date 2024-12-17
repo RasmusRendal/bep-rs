@@ -14,6 +14,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::mpsc::{Receiver, UnboundedReceiver};
 use tokio::time::error::Elapsed;
+use tokio_util::sync::CancellationToken;
 
 /// Call this function when the client has indicated it want to send a Request
 /// At the moment, it always responds with a hardcoded file
@@ -245,8 +246,18 @@ async fn handle_reading(
 
     loop {
         log::info!("{}: Waiting for a new message", peer_connection.get_name());
-        let header_len =
-            tokio::time::timeout(Duration::from_secs(120), stream.read_u16()).await?? as usize;
+        let hl_read = peer_connection
+            .cancellation_token
+            .run_until_cancelled(tokio::time::timeout(
+                Duration::from_secs(120),
+                stream.read_u16(),
+            ))
+            .await;
+        if hl_read.is_none() {
+            // Cancellation token
+            return Ok(());
+        }
+        let header_len = hl_read.unwrap()?? as usize;
         log::info!(
             "{}: Got a header length {}",
             peer_connection.get_name(),
@@ -451,8 +462,13 @@ async fn handle_writing(
     .await?;
 
     loop {
-        match tokio::time::timeout(Duration::from_secs(90), rx.recv()).await {
-            Ok(Some((msg, tx))) => {
+        match peer_connection
+            .cancellation_token
+            .run_until_cancelled(tokio::time::timeout(Duration::from_secs(90), rx.recv()))
+            .await
+        {
+            Some(Ok(Some((msg, tx)))) => {
+                // Message received
                 if !msg.is_empty() {
                     write_message(&mut wr, &mut peer_connection, &mut rx, &msg).await?;
                 }
@@ -466,14 +482,21 @@ async fn handle_writing(
                     }
                 }
             }
-            Ok(None) => {
+            Some(Ok(None)) => {
+                // rx closed
                 close_receiver(&mut rx).await;
                 return Ok(());
             }
-            Err(Elapsed { .. }) => {
+            Some(Err(Elapsed { .. })) => {
+                // Timeout elapsed, we should send a ping
                 let msg = items::Ping {};
                 let msg = msg.encode_for_bep();
                 write_message(&mut wr, &mut peer_connection, &mut rx, &msg).await?;
+            }
+            None => {
+                // Cancellation token cancelled
+                close_receiver(&mut rx).await;
+                return Ok(());
             }
         }
     }
@@ -494,7 +517,7 @@ pub async fn handle_connection(
     stream: (impl AsyncWrite + AsyncRead + Unpin + std::marker::Send + 'static),
     peer_connection: PeerConnection,
     rx: Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
-    mut shutdown_recv: UnboundedReceiver<()>,
+    cancellation_token: CancellationToken,
     server: bool,
 ) -> Result<(), PeerConnectionError> {
     let peerids = peer_connection
@@ -534,32 +557,30 @@ pub async fn handle_connection(
 
     peer_connection.send_index().await?;
     let name = peer_connection.get_name();
-    let sendclone = peer_connection.shutdown_send.clone();
     let peer_connectionclone = peer_connection.clone();
-    tokio::spawn(async move {
+    let cancellation_token_clone = cancellation_token.clone();
+    peer_connection.task_tracker.spawn(async move {
         let r = handle_reading(&mut rd, peer_connectionclone.clone()).await;
         if let Err(e) = &r {
             log::error!("{}: Got error from reader: {}", name, e);
             peer_connectionclone.close_err(e).await?;
         }
-        let _r = sendclone.send(());
+        cancellation_token_clone.cancel();
         r
     });
 
-    let sendclone = peer_connection.shutdown_send.clone();
     let peer_connectionclone = peer_connection.clone();
     let name = peer_connection.get_name();
-    tokio::spawn(async move {
+    let cancellation_token_clone = cancellation_token.clone();
+    peer_connection.task_tracker.spawn(async move {
         let r = handle_writing(wr, peer_connectionclone, rx).await;
         if let Err(e) = &r {
             log::error!("{}: Got error from writer: {}", name, e);
         }
-        let _r = sendclone.send(());
-        r
+        cancellation_token_clone.cancel();
     });
 
-    shutdown_recv.recv().await;
-    shutdown_recv.close();
+    peer_connection.task_tracker.wait().await;
 
     // Remove from list of listeners
     peer_connection

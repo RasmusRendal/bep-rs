@@ -8,6 +8,7 @@ use crate::models::Peer;
 use crate::sync_directory::{SyncDirectory, SyncFile};
 use error::{PeerCommandError, PeerConnectionError};
 use handlers::{drain_requests, handle_connection};
+use tokio_util::sync::CancellationToken;
 
 use core::time;
 use futures::channel::oneshot::{self, Canceled};
@@ -24,6 +25,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use std::thread;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{channel, Sender, UnboundedSender};
+use tokio_util::task::TaskTracker;
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum PeerRequestResponseType {
@@ -62,7 +64,8 @@ pub struct PeerConnection {
     // to know when the message has been sent.
     tx: Sender<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
     // A channel to activate, to shut down the connection
-    shutdown_send: UnboundedSender<()>,
+    cancellation_token: CancellationToken,
+    task_tracker: TaskTracker,
 
     // Any fatal error should be stored here
     error: Arc<OnceLock<Option<PeerConnectionError>>>,
@@ -79,15 +82,16 @@ impl PeerConnection {
         connector: bool,
     ) -> Self {
         let (tx, rx) = channel(100);
-        let (shutdown_send, shutdown_recv) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let cancellation_token = CancellationToken::new();
         let peer_connection = PeerConnection {
             state: state.clone(),
             requests: Arc::new(RwLock::new(HashMap::new())),
             tx,
-            shutdown_send,
+            cancellation_token: cancellation_token.clone(),
             error: Arc::new(OnceLock::new()),
             peer_id: Arc::new(OnceLock::new()),
             name: Arc::new(OnceLock::new()),
+            task_tracker: TaskTracker::new(),
         };
         let peer_connectionc = peer_connection.clone();
         tokio::spawn(async move {
@@ -95,7 +99,7 @@ impl PeerConnection {
                 socket,
                 peer_connection.clone(),
                 rx,
-                shutdown_recv,
+                cancellation_token,
                 connector,
             )
             .await
@@ -410,25 +414,9 @@ impl PeerConnection {
         }
     }
 
-    pub async fn wait_for_close(&self) -> io::Result<()> {
-        let (tx, rx) = oneshot::channel();
-        let id = StdRng::from_entropy().sample(Standard);
-        self.requests.write().unwrap().insert(
-            id,
-            PeerRequestListener {
-                id,
-                response_type: PeerRequestResponseType::WhenClosed,
-                peer_connection: tx,
-            },
-        );
-        if self.shutdown_send.is_closed() || self.tx.is_closed() {
-            log::info!("already shut");
-            return Ok(());
-        }
-
-        if let Err(e) = rx.await {
-            return Err(Error::new(ErrorKind::Other, e));
-        }
+    pub async fn wait_for_close(&self) -> Result<(), PeerConnectionError> {
+        self.task_tracker.wait().await;
+        self.has_error()?;
         Ok(())
     }
 
@@ -449,21 +437,10 @@ impl PeerConnection {
 
     pub async fn close_reason(&self, reason: String) -> tokio::io::Result<()> {
         log::info!("{}: Connection close requested", self.get_name());
-        if self.shutdown_send.is_closed() || self.tx.is_closed() {
-            log::info!("already shut");
-            return Ok(());
-        }
         let message = items::Close { reason }.encode_for_bep();
-        log::info!("submitted close");
         self.submit_request(-1, PeerRequestResponseType::WhenSent, message)
             .await?;
-        log::info!("done waiting");
-
-        // We ignore errors here.
-        // If the shutdown sender has an error, it's because it's because our connection
-        // is already (in the process) of being closed
-        let _ = self.shutdown_send.send(());
-
+        self.cancellation_token.cancel();
         Ok(())
     }
 
