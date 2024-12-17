@@ -280,7 +280,7 @@ async fn handle_reading(
         if header.r#type == items::MessageType::Request as i32 {
             log::info!("{}: Handling request", peer_connection.get_name());
             let peer_connectionclone = peer_connection.clone();
-            let request = receive_message!(items::Request, stream)?;
+            let request = items::receive_message::<items::Request>(stream).await?;
             tokio::spawn(async move {
                 if let Err(e) = handle_request(request, peer_connectionclone.clone()).await {
                     log::error!("Received an error when handling request: {}", e);
@@ -288,7 +288,7 @@ async fn handle_reading(
                 }
             });
         } else if header.r#type == items::MessageType::Index as i32 {
-            let index = receive_message!(items::Index, stream)?;
+            let index = items::receive_message::<items::Index>(stream).await?;
             let peer_connectionc = peer_connection.clone();
             tokio::spawn(async move {
                 if let Err(e) =
@@ -299,7 +299,7 @@ async fn handle_reading(
                 }
             });
         } else if header.r#type == items::MessageType::IndexUpdate as i32 {
-            let index = receive_message!(items::IndexUpdate, stream)?;
+            let index = items::receive_message::<items::IndexUpdate>(stream).await?;
             let peer_connectionc = peer_connection.clone();
             tokio::spawn(async move {
                 if let Err(e) =
@@ -312,7 +312,7 @@ async fn handle_reading(
         } else if header.r#type == items::MessageType::Response as i32 {
             log::info!("{}: Got a response", peer_connection.get_name());
             let peer_connectionclone = peer_connection.clone();
-            let response = receive_message!(items::Response, stream)?;
+            let response = items::receive_message::<items::Response>(stream).await?;
             tokio::spawn(async move {
                 if let Err(e) = handle_response(response, peer_connectionclone.clone()).await {
                     log::error!("Received an error when handling response: {}", e);
@@ -320,7 +320,7 @@ async fn handle_reading(
                 }
             });
         } else if header.r#type == items::MessageType::Close as i32 {
-            let close = receive_message!(items::Close, stream)?;
+            let close = items::receive_message::<items::Close>(stream).await?;
             log::info!(
                 "{}: Peer requested close. Reason: {}",
                 peer_connection.get_name(),
@@ -328,10 +328,10 @@ async fn handle_reading(
             );
             return Ok(());
         } else if header.r#type == items::MessageType::Ping as i32 {
-            let _ = receive_message!(items::Ping, stream)?;
+            let _ = items::receive_message::<items::Ping>(stream).await?;
             log::info!("{}: Received a ping", peer_connection.get_name());
         } else if header.r#type == items::MessageType::ClusterConfig as i32 {
-            let _cluster_config = receive_message!(items::ClusterConfig, stream)?;
+            let _cluster_config = items::receive_message::<items::ClusterConfig>(stream).await?;
             log::info!("{}: We have received a cluster config. Your peer might have folders or other peers to share with you", peer_connection.get_name());
             //TODO: Actually use this for something
         } else {

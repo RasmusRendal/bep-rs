@@ -1,7 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use prost::Message;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadHalf};
 
 use super::PeerConnectionError;
 
@@ -40,19 +40,16 @@ implement!(Index);
 implement!(ClusterConfig);
 implement!(Ping);
 
-/// Given a stream, read a four-byte length, and then
-/// the message
-#[macro_export]
-macro_rules! receive_message {
-    ( $type:ty, $stream:expr ) => {{
-        let msg_len = $stream.read_u32().await? as usize;
-        if msg_len == 0 {
-            log::error!("Message is empty");
-        }
-        let mut message_buffer = vec![0u8; msg_len];
-        $stream.read_exact(&mut message_buffer).await?;
-        <$type>::decode(&*message_buffer)
-    }};
+pub async fn receive_message<T: prost::Message + std::default::Default>(
+    stream: &mut ReadHalf<impl AsyncRead>,
+) -> Result<T, std::io::Error> {
+    let msg_len = stream.read_u32().await? as usize;
+    if msg_len == 0 {
+        log::error!("Message is empty");
+    }
+    let mut message_buffer = vec![0u8; msg_len];
+    stream.read_exact(&mut message_buffer).await?;
+    Ok(T::decode(std::io::Cursor::new(message_buffer))?)
 }
 
 /// Given a socket, send a BEP hello message
