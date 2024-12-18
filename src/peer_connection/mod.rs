@@ -3,6 +3,7 @@ mod items;
 pub mod error;
 mod handlers;
 mod verifier;
+mod watcher;
 use crate::bep_state_reference::BepStateRef;
 use crate::models::Peer;
 use crate::sync_directory::{SyncDirectory, SyncFile};
@@ -457,5 +458,15 @@ impl PeerConnection {
 
     pub fn get_peer_name(&self) -> Option<String> {
         self.get_peer().map(|x| x.name)
+    }
+
+    pub fn watch(&mut self) {
+        let pc_clone = self.clone();
+        self.task_tracker.spawn(async move {
+            if let Err(e) = watcher::watch(pc_clone.clone()).await {
+                log::error!("{}: Watcher error: {}", pc_clone.get_name(), e);
+            }
+            log::info!("{}: Shut down watcher", pc_clone.get_name());
+        });
     }
 }

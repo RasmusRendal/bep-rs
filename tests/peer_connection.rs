@@ -451,3 +451,36 @@ async fn test_update_file() -> io::Result<()> {
     connection2.close().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_track_dir() -> io::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut test_struct = TestStruct::new();
+
+    test_struct.peer();
+    test_struct.add_sync_dirs().await;
+    test_struct.connect_sync_dirs().await;
+
+    let (connection1, mut connection2) = test_struct.connect().await.unwrap();
+
+    connection1.wait_for_ready().await.unwrap();
+    connection2.wait_for_ready().await.unwrap();
+    connection2.watch();
+
+    thread::sleep(time::Duration::from_millis(200));
+
+    test_struct.write_hello_file(FILE_CONTENTS);
+
+    thread::sleep(time::Duration::from_millis(200));
+    let mut dstfile = test_struct.peer1dirpath.clone();
+    dstfile.push(FILE_NAME);
+    let file = File::open(dstfile).unwrap();
+    let mut buf_reader = BufReader::new(file);
+    let mut contents = String::new();
+    buf_reader.read_to_string(&mut contents)?;
+    assert_eq!(contents, FILE_CONTENTS);
+    connection1.close().await?;
+    connection2.close().await?;
+    Ok(())
+}

@@ -19,7 +19,9 @@ async fn run_server(address: String, state: BepStateRef) -> io::Result<()> {
     loop {
         let (socket, _) = listener.accept().await?;
 
-        PeerConnection::new(socket, state.clone(), true);
+        let mut pc = PeerConnection::new(socket, state.clone(), true);
+        let _ = pc.wait_for_ready().await;
+        pc.watch();
     }
 }
 

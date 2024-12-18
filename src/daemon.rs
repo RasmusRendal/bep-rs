@@ -20,7 +20,8 @@ async fn connect_to_server(state: BepStateRef, addr: String) -> Result<(), PeerC
     log::info!(target: "Daemon", "Connecting to {addr}");
 
     let stream = TcpStream::connect(addr).await?;
-    let connection = PeerConnection::new(stream, state, false);
+    let mut connection = PeerConnection::new(stream, state, false);
+    connection.watch();
     connection.wait_for_close().await?;
     Ok(())
 }
