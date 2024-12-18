@@ -234,7 +234,7 @@ async fn handle_index(
 
 /// The main function of the server. Decode a message, and handle it accordingly
 async fn handle_reading(
-    stream: &mut ReadHalf<impl AsyncRead>,
+    stream: &mut ReadHalf<impl AsyncRead + Send>,
     peer_connection: PeerConnection,
 ) -> tokio::io::Result<()> {
     let hello = items::receive_hello(stream).await.unwrap();
@@ -271,16 +271,20 @@ async fn handle_reading(
             peer_connection.get_name(),
             header.r#type
         );
-        if header.compression != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Peer is trying to use compression, but we do not support it",
-            ));
-        }
+        let compression = match items::MessageCompression::from_i32(header.compression) {
+            Some(items::MessageCompression::None) => false,
+            Some(items::MessageCompression::Lz4) => true,
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Unknown encryption type",
+                ))
+            }
+        };
         if header.r#type == items::MessageType::Request as i32 {
             log::info!("{}: Handling request", peer_connection.get_name());
             let peer_connectionclone = peer_connection.clone();
-            let request = items::receive_message::<items::Request>(stream).await?;
+            let request = items::receive_message::<items::Request>(stream, compression).await?;
             tokio::spawn(async move {
                 if let Err(e) = handle_request(request, peer_connectionclone.clone()).await {
                     log::error!("Received an error when handling request: {}", e);
@@ -288,7 +292,7 @@ async fn handle_reading(
                 }
             });
         } else if header.r#type == items::MessageType::Index as i32 {
-            let index = items::receive_message::<items::Index>(stream).await?;
+            let index = items::receive_message::<items::Index>(stream, compression).await?;
             let peer_connectionc = peer_connection.clone();
             tokio::spawn(async move {
                 if let Err(e) =
@@ -299,7 +303,7 @@ async fn handle_reading(
                 }
             });
         } else if header.r#type == items::MessageType::IndexUpdate as i32 {
-            let index = items::receive_message::<items::IndexUpdate>(stream).await?;
+            let index = items::receive_message::<items::IndexUpdate>(stream, compression).await?;
             let peer_connectionc = peer_connection.clone();
             tokio::spawn(async move {
                 if let Err(e) =
@@ -312,7 +316,7 @@ async fn handle_reading(
         } else if header.r#type == items::MessageType::Response as i32 {
             log::info!("{}: Got a response", peer_connection.get_name());
             let peer_connectionclone = peer_connection.clone();
-            let response = items::receive_message::<items::Response>(stream).await?;
+            let response = items::receive_message::<items::Response>(stream, compression).await?;
             tokio::spawn(async move {
                 if let Err(e) = handle_response(response, peer_connectionclone.clone()).await {
                     log::error!("Received an error when handling response: {}", e);
@@ -320,7 +324,7 @@ async fn handle_reading(
                 }
             });
         } else if header.r#type == items::MessageType::Close as i32 {
-            let close = items::receive_message::<items::Close>(stream).await?;
+            let close = items::receive_message::<items::Close>(stream, compression).await?;
             log::info!(
                 "{}: Peer requested close. Reason: {}",
                 peer_connection.get_name(),
@@ -328,10 +332,11 @@ async fn handle_reading(
             );
             return Ok(());
         } else if header.r#type == items::MessageType::Ping as i32 {
-            let _ = items::receive_message::<items::Ping>(stream).await?;
+            let _ = items::receive_message::<items::Ping>(stream, compression).await?;
             log::info!("{}: Received a ping", peer_connection.get_name());
         } else if header.r#type == items::MessageType::ClusterConfig as i32 {
-            let _cluster_config = items::receive_message::<items::ClusterConfig>(stream).await?;
+            let _cluster_config =
+                items::receive_message::<items::ClusterConfig>(stream, compression).await?;
             log::info!("{}: We have received a cluster config. Your peer might have folders or other peers to share with you", peer_connection.get_name());
             //TODO: Actually use this for something
         } else {

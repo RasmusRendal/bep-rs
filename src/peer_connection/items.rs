@@ -1,7 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use prost::Message;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadHalf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use super::PeerConnectionError;
 
@@ -41,7 +41,8 @@ implement!(ClusterConfig);
 implement!(Ping);
 
 pub async fn receive_message<T: prost::Message + std::default::Default>(
-    stream: &mut ReadHalf<impl AsyncRead>,
+    stream: &mut (impl AsyncRead + Unpin),
+    compression: bool,
 ) -> Result<T, std::io::Error> {
     let msg_len = stream.read_u32().await? as usize;
     if msg_len == 0 {
@@ -49,7 +50,11 @@ pub async fn receive_message<T: prost::Message + std::default::Default>(
     }
     let mut message_buffer = vec![0u8; msg_len];
     stream.read_exact(&mut message_buffer).await?;
-    Ok(T::decode(std::io::Cursor::new(message_buffer))?)
+    if !compression {
+        return Ok(T::decode(std::io::Cursor::new(message_buffer))?);
+    }
+    let result = lz4_flex::block::decompress_size_prepended(&message_buffer).unwrap();
+    Ok(T::decode(std::io::Cursor::new(result))?)
 }
 
 /// Given a socket, send a BEP hello message

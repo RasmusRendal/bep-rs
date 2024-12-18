@@ -9,9 +9,8 @@ Currently it supports syncing folders consisting only small files, smaller than 
  - [X] Synchronize single files
  - [X] Send the cluster config
  - [X] Send a continuous ping, to keep connection open
+ - [X] Support compressed messages
  - [ ] Split files up into blocks
- - [ ] Support compressed messages
- - [ ] Support compressed files/metadata
- - [ ] Index update messages
- - [ ] Get it working with the Go client
+ - [ ] Sending Index update messages
+ - [X] Get it working with the Go client
  - [ ] DownloadProgress messages
