@@ -358,6 +358,18 @@ impl BepState {
             .unwrap_or_default()
     }
 
+    pub fn add_address(&mut self, peer: Peer, addr: String) {
+        use crate::schema::peer_addresses;
+        diesel::insert_into(peer_addresses::table)
+            .values(PeerAddress {
+                id: None,
+                address: addr,
+                peer_id: peer.id,
+            })
+            .execute(&mut self.connection)
+            .expect("Error adding address");
+    }
+
     /// Stop syncing some directory
     pub fn remove_sync_directory(&mut self, to_remove: String) {
         use crate::schema::sync_folders::dsl::sync_folders;
@@ -397,6 +409,17 @@ impl BepState {
         self.get_sync_directory(&folder_id).unwrap()
     }
 
+    pub fn get_peer(&mut self, peer_name: String) -> Peer {
+        use crate::schema::peers::dsl::*;
+        peers
+            .filter(name.eq(peer_name))
+            .limit(1)
+            .load::<Peer>(&mut self.connection)
+            .unwrap()
+            .pop()
+            .unwrap()
+    }
+
     pub fn add_peer_vec_id(&mut self, peer_name: String, peer_id: Vec<u8>) -> Peer {
         let boxed_slice = peer_id.into_boxed_slice();
         let boxed_array: Box<[u8; 32]> = match boxed_slice.try_into() {
@@ -408,7 +431,6 @@ impl BepState {
 
     pub fn add_peer(&mut self, peer_name: String, peer_id: [u8; 32]) -> Peer {
         use crate::schema::peers;
-        use crate::schema::peers::dsl::*;
         let p = Peer {
             id: None,
             device_id: Some(peer_id.to_vec()),
@@ -419,13 +441,7 @@ impl BepState {
             .execute(&mut self.connection)
             .expect("Error adding peer");
 
-        peers
-            .filter(name.eq(peer_name))
-            .limit(1)
-            .load::<Peer>(&mut self.connection)
-            .unwrap()
-            .pop()
-            .unwrap()
+        self.get_peer(peer_name)
     }
 
     /// Allows the peer to request files from a directory
