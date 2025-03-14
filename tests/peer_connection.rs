@@ -1,4 +1,3 @@
-use bep_rs::bep_state::BepState;
 use bep_rs::bep_state_reference::BepStateRef;
 use bep_rs::models::Peer;
 use bep_rs::peer_connection::*;
@@ -11,7 +10,6 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::{thread, time};
 use tokio::io;
 
@@ -38,17 +36,17 @@ struct TestStruct {
 }
 
 impl TestStruct {
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
         let statedir1 = tempfile::tempdir().unwrap().into_path();
-        let state1 = Arc::new(Mutex::new(BepState::new(statedir1.clone())));
-        state1.lock().unwrap().set_name("con1".to_string());
+        let state1 = BepStateRef::new(statedir1.clone());
+        state1.set_name("con1".to_string()).await;
         let statedir2 = tempfile::tempdir().unwrap().into_path();
-        let state2 = Arc::new(Mutex::new(BepState::new(statedir2.clone())));
-        state2.lock().unwrap().set_name("con2".to_string());
+        let state2 = BepStateRef::new(statedir2.clone());
+        state2.set_name("con2".to_string()).await;
 
         TestStruct {
-            state1: BepStateRef::new(state1),
-            state2: BepStateRef::new(state2),
+            state1,
+            state2,
             conn1: None,
             conn2: None,
             peer1: None,
@@ -60,15 +58,15 @@ impl TestStruct {
         }
     }
 
-    pub fn peer(&mut self) {
-        let peer1 = self.state2.state.lock().unwrap().add_peer(
-            "con1".to_string(),
-            self.state1.state.lock().unwrap().get_id(),
-        );
-        let peer2 = self.state1.state.lock().unwrap().add_peer(
-            "con2".to_string(),
-            self.state2.state.lock().unwrap().get_id(),
-        );
+    pub async fn peer(&mut self) {
+        let peer1 = self
+            .state2
+            .add_peer("con1".to_string(), self.state1.get_id().await)
+            .await;
+        let peer2 = self
+            .state1
+            .add_peer("con2".to_string(), self.state2.get_id().await)
+            .await;
         self.peer1 = Some(peer1);
         self.peer2 = Some(peer2);
     }
@@ -103,14 +101,18 @@ impl TestStruct {
     }
 
     pub async fn connect_sync_dirs(&mut self) {
-        self.state1.state.lock().unwrap().sync_directory_with_peer(
-            self.peer1dir.as_ref().unwrap(),
-            self.peer2.as_ref().unwrap(),
-        );
-        self.state2.state.lock().unwrap().sync_directory_with_peer(
-            self.peer2dir.as_ref().unwrap(),
-            self.peer1.as_ref().unwrap(),
-        );
+        self.state1
+            .sync_directory_with_peer(
+                self.peer1dir.as_ref().unwrap(),
+                self.peer2.as_ref().unwrap(),
+            )
+            .await;
+        self.state2
+            .sync_directory_with_peer(
+                self.peer2dir.as_ref().unwrap(),
+                self.peer1.as_ref().unwrap(),
+            )
+            .await;
     }
 
     pub fn write_hello_file(&mut self, contents: &str) {
@@ -125,14 +127,14 @@ impl TestStruct {
 async fn test_open_close() -> io::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let mut test_struct = TestStruct::new();
-    let _ = test_struct.peer();
+    let mut test_struct = TestStruct::new().await;
+    let _ = test_struct.peer().await;
     let (connection1, connection2) = test_struct.connect().await.unwrap();
 
     connection1.close().await.unwrap();
     connection2.close().await.unwrap();
-    assert!(connection1.get_peer_name().unwrap() == "con2".to_string());
-    assert!(connection2.get_peer_name().unwrap() == "con1".to_string());
+    assert!(connection1.get_peer_name().await.unwrap() == "con2".to_string());
+    assert!(connection2.get_peer_name().await.unwrap() == "con1".to_string());
     Ok(())
 }
 
@@ -140,8 +142,8 @@ async fn test_open_close() -> io::Result<()> {
 async fn test_double_close_err() -> io::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let mut test_struct = TestStruct::new();
-    let _ = test_struct.peer();
+    let mut test_struct = TestStruct::new().await;
+    let _ = test_struct.peer().await;
     let (connection1, connection2) = test_struct.connect().await.unwrap();
 
     log::info!("we have connected");
@@ -159,7 +161,7 @@ async fn test_double_close_err() -> io::Result<()> {
 async fn test_close_nonpeer() -> io::Result<()> {
     // If we connect two nonpeered instances, the connection should close rapidly
     let _ = env_logger::builder().is_test(true).try_init();
-    let mut test_struct = TestStruct::new();
+    let mut test_struct = TestStruct::new().await;
     let err = test_struct.connect().await;
 
     assert!(err.is_err());
@@ -175,9 +177,9 @@ async fn test_close_nonpeer() -> io::Result<()> {
 async fn test_get_nonexistent_file() -> io::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let mut test_struct = TestStruct::new();
+    let mut test_struct = TestStruct::new().await;
 
-    test_struct.peer();
+    test_struct.peer().await;
     test_struct.add_sync_dirs().await;
     test_struct.connect_sync_dirs().await;
 
@@ -216,10 +218,10 @@ async fn test_get_nonexistent_file() -> io::Result<()> {
 async fn test_get_file() -> io::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let mut test_struct = TestStruct::new();
+    let mut test_struct = TestStruct::new().await;
 
     test_struct.write_hello_file(FILE_CONTENTS);
-    test_struct.peer();
+    test_struct.peer().await;
     test_struct.add_sync_dirs().await;
     test_struct.connect_sync_dirs().await;
 
@@ -263,8 +265,8 @@ async fn test_get_file() -> io::Result<()> {
 async fn test_nonsynced_directory() -> io::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let mut test_struct = TestStruct::new();
-    test_struct.peer();
+    let mut test_struct = TestStruct::new().await;
+    test_struct.peer().await;
     test_struct.write_hello_file(FILE_CONTENTS);
     test_struct.add_sync_dirs().await;
 
@@ -303,9 +305,9 @@ async fn test_get_directory() -> io::Result<()> {
     // should be in there
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let mut test_struct = TestStruct::new();
+    let mut test_struct = TestStruct::new().await;
     test_struct.write_hello_file(FILE_CONTENTS);
-    test_struct.peer();
+    test_struct.peer().await;
     test_struct.add_sync_dirs().await;
     test_struct.connect_sync_dirs().await;
 
@@ -350,9 +352,9 @@ async fn test_update_file() -> io::Result<()> {
     // After receiving a file, we should be able to change it
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let mut test_struct = TestStruct::new();
+    let mut test_struct = TestStruct::new().await;
     test_struct.write_hello_file(FILE_CONTENTS);
-    test_struct.peer();
+    test_struct.peer().await;
     test_struct.add_sync_dirs().await;
     test_struct.connect_sync_dirs().await;
 
@@ -456,9 +458,9 @@ async fn test_update_file() -> io::Result<()> {
 async fn test_track_dir() -> io::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let mut test_struct = TestStruct::new();
+    let mut test_struct = TestStruct::new().await;
 
-    test_struct.peer();
+    test_struct.peer().await;
     test_struct.add_sync_dirs().await;
     test_struct.connect_sync_dirs().await;
 

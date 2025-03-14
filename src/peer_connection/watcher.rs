@@ -27,14 +27,22 @@ fn async_watcher() -> notify::Result<(RecommendedWatcher, Receiver<notify::Resul
 // TODO: This is probably the wrong abstraction level.
 // We end up with a watcher for each connection
 pub async fn watch(peer_connection: PeerConnection) -> Result<(), notify::Error> {
-    let peer = peer_connection.get_peer().unwrap();
+    let peer = peer_connection.get_peer().await.unwrap();
     let (mut watcher, mut rx) = async_watcher()?;
 
     let dirs = peer_connection.state.get_sync_directories().await;
     for dir in dirs {
-        if peer_connection.state.is_directory_synced(&dir, &peer).await {
+        if peer_connection
+            .state
+            .is_directory_synced(dir.id.clone(), peer.id.unwrap())
+            .await
+        {
             watcher.watch(&dir.path, RecursiveMode::Recursive)?;
-            log::info!("{} Watching {:?}", peer_connection.get_name(), dir.path);
+            log::info!(
+                "{} Watching {:?}",
+                peer_connection.get_name().await,
+                dir.path
+            );
         }
     }
     let cancellation_token = peer_connection.cancellation_token.clone();
@@ -45,7 +53,7 @@ pub async fn watch(peer_connection: PeerConnection) -> Result<(), notify::Error>
                     if let Err(e) = peer_connection.send_index().await {
                         log::error!(
                             "{}: Error when trying to send an updated index: {}",
-                            peer_connection.get_name(),
+                            peer_connection.get_name().await,
                             e
                         );
                     }

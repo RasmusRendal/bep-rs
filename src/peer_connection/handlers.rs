@@ -24,7 +24,7 @@ async fn handle_request(
 ) -> tokio::io::Result<()> {
     log::info!(
         "{}: Received request {:?}",
-        peer_connection.get_name(),
+        peer_connection.get_name().await,
         request
     );
 
@@ -33,12 +33,12 @@ async fn handle_request(
         .get_sync_directory(&request.folder)
         .await;
 
-    let peer = peer_connection.get_peer().unwrap();
+    let peer = peer_connection.get_peer().await.unwrap();
 
     if dir.is_none()
         || !peer_connection
             .state
-            .is_directory_synced(dir.as_ref().unwrap(), &peer)
+            .is_directory_synced(dir.as_ref().unwrap().id.clone(), peer.id.unwrap())
             .await
     {
         log::error!("Peer requested file, but it does not exist");
@@ -92,14 +92,17 @@ async fn handle_request(
     };
     log::info!(
         "{}: Sending response {:?}",
-        peer_connection.get_name(),
+        peer_connection.get_name().await,
         response
     );
     peer_connection
         .submit_message(response.encode_for_bep())
         .await;
 
-    log::info!("{}: Finished handling request", peer_connection.get_name());
+    log::info!(
+        "{}: Finished handling request",
+        peer_connection.get_name().await
+    );
     Ok(())
 }
 
@@ -109,7 +112,7 @@ async fn handle_response(
 ) -> tokio::io::Result<()> {
     log::info!(
         "{}: Received response for request {}",
-        peer_connection.get_name(),
+        peer_connection.get_name().await,
         response.id
     );
     if let Some(peer_request) = peer_connection
@@ -137,7 +140,7 @@ async fn handle_index(
     files: Vec<items::FileInfo>,
     peer_connection: PeerConnection,
 ) -> tokio::io::Result<()> {
-    log::info!("{}: Handling index", peer_connection.get_name());
+    log::info!("{}: Handling index", peer_connection.get_name().await);
     let syncdir = peer_connection
         .state
         .get_sync_directory(&folder)
@@ -147,7 +150,7 @@ async fn handle_index(
     for file in files {
         log::info!(
             "{}: Handling index file {}",
-            peer_connection.get_name(),
+            peer_connection.get_name().await,
             file.name
         );
         let localfile = localindex
@@ -160,7 +163,7 @@ async fn handle_index(
             }
             log::info!(
                 "{}: Updating file {}",
-                peer_connection.get_name(),
+                peer_connection.get_name().await,
                 file.name
             );
             localfile.versions = file
@@ -183,10 +186,14 @@ async fn handle_index(
             localfile.modified_by = file.modified_by;
             peer_connection
                 .state
-                .update_sync_file(syncdir.clone(), localfile.clone())
+                .update_sync_file(&syncdir, &localfile)
                 .await;
         } else {
-            log::info!("{}: New file {}", peer_connection.get_name(), file.name);
+            log::info!(
+                "{}: New file {}",
+                peer_connection.get_name().await,
+                file.name
+            );
             let mut path = syncdir.path.clone();
             path.push(file.name.clone());
             let syncfile = SyncFile {
@@ -214,16 +221,16 @@ async fn handle_index(
             };
             peer_connection
                 .state
-                .update_sync_file(syncdir.clone(), syncfile)
+                .update_sync_file(&syncdir, &syncfile)
                 .await;
         }
     }
-    log::info!("{}: Index merged", peer_connection.get_name());
+    log::info!("{}: Index merged", peer_connection.get_name().await);
     tokio::spawn(async move {
         if let Err(e) = peer_connection.get_directory(&syncdir).await {
             log::error!(
                 "{}: Got error syncing directory {}",
-                peer_connection.get_name(),
+                peer_connection.get_name().await,
                 e
             );
         }
@@ -240,12 +247,15 @@ async fn handle_reading(
     let hello = items::receive_hello(stream).await.unwrap();
     log::info!(
         "{}: Hello contents: {:?}",
-        peer_connection.get_name(),
+        peer_connection.get_name().await,
         hello
     );
 
     loop {
-        log::info!("{}: Waiting for a new message", peer_connection.get_name());
+        log::info!(
+            "{}: Waiting for a new message",
+            peer_connection.get_name().await
+        );
         let hl_read = peer_connection
             .cancellation_token
             .run_until_cancelled(tokio::time::timeout(
@@ -260,7 +270,7 @@ async fn handle_reading(
         let header_len = hl_read.unwrap()?? as usize;
         log::info!(
             "{}: Got a header length {}",
-            peer_connection.get_name(),
+            peer_connection.get_name().await,
             header_len
         );
         let mut header = vec![0u8; header_len];
@@ -268,7 +278,7 @@ async fn handle_reading(
         let header = items::Header::decode(&*header)?;
         log::info!(
             "{}: Got a header of type {}",
-            peer_connection.get_name(),
+            peer_connection.get_name().await,
             header.r#type
         );
         let compression = match items::MessageCompression::from_i32(header.compression) {
@@ -282,7 +292,7 @@ async fn handle_reading(
             }
         };
         if header.r#type == items::MessageType::Request as i32 {
-            log::info!("{}: Handling request", peer_connection.get_name());
+            log::info!("{}: Handling request", peer_connection.get_name().await);
             let peer_connectionclone = peer_connection.clone();
             let request = items::receive_message::<items::Request>(stream, compression).await?;
             tokio::spawn(async move {
@@ -314,7 +324,7 @@ async fn handle_reading(
                 }
             });
         } else if header.r#type == items::MessageType::Response as i32 {
-            log::info!("{}: Got a response", peer_connection.get_name());
+            log::info!("{}: Got a response", peer_connection.get_name().await);
             let peer_connectionclone = peer_connection.clone();
             let response = items::receive_message::<items::Response>(stream, compression).await?;
             tokio::spawn(async move {
@@ -327,22 +337,22 @@ async fn handle_reading(
             let close = items::receive_message::<items::Close>(stream, compression).await?;
             log::info!(
                 "{}: Peer requested close. Reason: {}",
-                peer_connection.get_name(),
+                peer_connection.get_name().await,
                 close.reason
             );
             return Ok(());
         } else if header.r#type == items::MessageType::Ping as i32 {
             let _ = items::receive_message::<items::Ping>(stream, compression).await?;
-            log::info!("{}: Received a ping", peer_connection.get_name());
+            log::info!("{}: Received a ping", peer_connection.get_name().await);
         } else if header.r#type == items::MessageType::ClusterConfig as i32 {
             let _cluster_config =
                 items::receive_message::<items::ClusterConfig>(stream, compression).await?;
-            log::info!("{}: We have received a cluster config. Your peer might have folders or other peers to share with you", peer_connection.get_name());
+            log::info!("{}: We have received a cluster config. Your peer might have folders or other peers to share with you", peer_connection.get_name().await);
             //TODO: Actually use this for something
         } else {
             log::error!(
                 "{}: Got unknown message type {}",
-                peer_connection.get_name(),
+                peer_connection.get_name().await,
                 header.r#type
             );
             return Err(io::Error::new(
@@ -372,12 +382,12 @@ async fn close_receiver(
 }
 
 async fn generate_cluster_config(peer_connection: &mut PeerConnection) -> items::ClusterConfig {
-    let peer_id = peer_connection.get_peer().unwrap().id.unwrap();
+    let peer_id = peer_connection.get_peer().await.unwrap().id.unwrap();
     let myself = {
-        let mut state = peer_connection.state.state.lock().unwrap();
+        let state = &peer_connection.state;
         items::Device {
-            id: state.get_id().to_vec(),
-            name: state.get_name(),
+            id: state.get_id().await.to_vec(),
+            name: state.get_name().await,
             addresses: Vec::new(),
             compression: 1,
             cert_name: "".to_string(),
@@ -391,10 +401,8 @@ async fn generate_cluster_config(peer_connection: &mut PeerConnection) -> items:
     items::ClusterConfig {
         folders: peer_connection
             .state
-            .state
-            .lock()
-            .unwrap()
             .get_synced_directories(peer_id)
+            .await
             .into_iter()
             .map(|(dir, peers)| {
                 let mut peers: Vec<items::Device> = peers
@@ -439,7 +447,7 @@ async fn write_message(
     if let Err(e) = wr.write_all(msg).await {
         log::error!(
             "{}: Error writing message, closing",
-            peer_connection.get_name()
+            peer_connection.get_name().await
         );
         close_receiver(rx).await;
         return Err(e);
@@ -453,7 +461,7 @@ async fn handle_writing(
     mut peer_connection: PeerConnection,
     mut rx: Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
 ) -> tokio::io::Result<()> {
-    items::send_hello(&mut wr, peer_connection.get_name())
+    items::send_hello(&mut wr, peer_connection.get_name().await)
         .await
         .unwrap();
 
@@ -482,7 +490,7 @@ async fn handle_writing(
                     if let Err(_e) = r {
                         log::error!(
                             "{}: Got error when sending response:",
-                            peer_connection.get_name()
+                            peer_connection.get_name().await
                         );
                     }
                 }
@@ -527,41 +535,36 @@ pub async fn handle_connection(
 ) -> Result<(), PeerConnectionError> {
     let peerids = peer_connection
         .state
-        .state
-        .lock()
-        .unwrap()
         .get_peers()
+        .await
         .into_iter()
         .map(|x| x.device_id.unwrap_or_default().clone())
         .collect();
-    let certificate = tokio_rustls::rustls::Certificate(
-        peer_connection
-            .state
-            .state
-            .lock()
-            .unwrap()
-            .get_certificate(),
-    );
-    let key =
-        tokio_rustls::rustls::PrivateKey(peer_connection.state.state.lock().unwrap().get_key());
+    let certificate =
+        tokio_rustls::rustls::Certificate(peer_connection.state.get_certificate().await);
+    let key = tokio_rustls::rustls::PrivateKey(peer_connection.state.get_key().await);
 
     log::info!("Verifying connection");
     let conn_result = verify_connection(stream, certificate, key, peerids, server).await;
     if conn_result.is_err() {
         log::error!(
             "{}: Error establishing connection: {}",
-            peer_connection.get_name(),
+            peer_connection.get_name().await,
             conn_result.err().unwrap()
         );
         return Err(PeerConnectionError::UnknownPeer);
     }
     let (tcpstream, peer_id) = conn_result.unwrap();
-    log::info!("{}: Peer id: {:?}", peer_connection.get_name(), peer_id);
+    log::info!(
+        "{}: Peer id: {:?}",
+        peer_connection.get_name().await,
+        peer_id
+    );
     peer_connection.set_peer(peer_id);
     let (mut rd, wr) = tokio::io::split(tcpstream);
 
     peer_connection.send_index().await?;
-    let name = peer_connection.get_name();
+    let name = peer_connection.get_name().await;
     let peer_connectionclone = peer_connection.clone();
     let cancellation_token_clone = cancellation_token.clone();
     peer_connection.task_tracker.spawn(async move {
@@ -575,7 +578,7 @@ pub async fn handle_connection(
     });
 
     let peer_connectionclone = peer_connection.clone();
-    let name = peer_connection.get_name();
+    let name = peer_connection.get_name().await;
     let cancellation_token_clone = cancellation_token.clone();
     peer_connection.task_tracker.spawn(async move {
         let r = handle_writing(wr, peer_connectionclone, rx).await;
@@ -592,10 +595,10 @@ pub async fn handle_connection(
         .state
         .state
         .lock()
-        .unwrap()
+        .await
         .listeners
         .retain(|x| !x.tx.same_channel(&peer_connection.tx));
 
-    log::info!("{}: Shutting down server", peer_connection.get_name());
+    log::info!("{}: Shutting down server", peer_connection.get_name().await);
     Ok(())
 }

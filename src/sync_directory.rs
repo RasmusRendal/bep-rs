@@ -48,9 +48,9 @@ fn comp_hashes(h1: &[u8], h2: &[u8]) -> bool {
 impl SyncDirectory {
     pub async fn generate_index(&self, state: &BepStateRef) -> Vec<SyncFile> {
         // TODO: Handle errors in some manner
-        let short_id = state.state.lock().unwrap().get_short_id();
+        let short_id = state.get_short_id().await;
         let path = self.path.clone();
-        let mut sync_files = state.state.lock().unwrap().get_sync_files(&self.id);
+        let mut sync_files = state.get_sync_files(&self.id).await;
         let mut out_files: Vec<SyncFile> = Vec::new();
         for file in path.read_dir().unwrap().flatten() {
             let mut buf_reader = BufReader::new(File::open(file.path()).unwrap());
@@ -68,11 +68,7 @@ impl SyncDirectory {
                         index_file.synced_version = vnumber;
                         index_file.versions.push((short_id, vnumber));
                         index_file.hash = hash;
-                        state
-                            .state
-                            .lock()
-                            .unwrap()
-                            .update_sync_file(self, index_file);
+                        state.update_sync_file(self, index_file).await;
                     }
                     out_files.push(index_file.clone());
                 }
@@ -91,10 +87,8 @@ impl SyncDirectory {
                         }],
                     });
                     state
-                        .state
-                        .lock()
-                        .unwrap()
-                        .update_sync_file(self, out_files.last().unwrap());
+                        .update_sync_file(self, out_files.last().unwrap())
+                        .await;
                 }
             }
         }
@@ -107,7 +101,7 @@ impl SyncDirectory {
     }
 
     pub async fn get_index(&self, state: BepStateRef) -> Vec<SyncFile> {
-        state.state.lock().unwrap().get_sync_files(&self.id)
+        state.get_sync_files(&self.id).await
     }
 }
 
@@ -190,7 +184,7 @@ mod tests {
         let directory = state.add_sync_directory(path.clone(), None);
 
         let mut index = directory
-            .generate_index(&BepStateRef::from_state(state))
+            .generate_index(&BepStateRef::from_bepstate(state))
             .await;
         assert!(index.len() == 1);
         let fileinfo = index.pop().unwrap();
@@ -232,7 +226,7 @@ mod tests {
         // only when we change the file
         let _ = env_logger::builder().is_test(true).try_init();
         let statedir = tempfile::tempdir().unwrap().into_path();
-        let mut state = BepStateRef::from_state(BepState::new(statedir));
+        let state = BepStateRef::new(statedir);
 
         let file_contents1 = "hello world";
         let file_contents2 = "some other contents";

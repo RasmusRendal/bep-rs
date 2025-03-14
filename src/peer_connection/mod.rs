@@ -96,6 +96,12 @@ impl PeerConnection {
         };
         let peer_connectionc = peer_connection.clone();
         tokio::spawn(async move {
+            state
+                .state
+                .lock()
+                .await
+                .listeners
+                .push(peer_connection.clone());
             if let Err(e) = handle_connection(
                 socket,
                 peer_connection.clone(),
@@ -107,13 +113,13 @@ impl PeerConnection {
             {
                 log::error!(
                     "{}: Error occured in client {:?}",
-                    peer_connection.get_name(),
+                    peer_connection.get_name().await,
                     e
                 );
                 if let Err(err) = peer_connection.error.set(Some(e)) {
                     log::error!(
                         "{}: Error storing error in client: {:?}",
-                        peer_connection.get_name(),
+                        peer_connection.get_name().await,
                         err
                     );
                 }
@@ -121,21 +127,18 @@ impl PeerConnection {
             drain_requests(&peer_connection);
         });
 
-        state
-            .state
-            .as_ref()
-            .lock()
-            .unwrap()
-            .listeners
-            .push(peer_connectionc.clone());
         peer_connectionc
     }
 
     pub async fn send_index(&self) -> io::Result<()> {
-        if let Some(peer) = self.get_peer() {
+        if let Some(peer) = self.get_peer().await {
             let directories = self.state.get_sync_directories().await;
             for dir in directories {
-                if !self.state.is_directory_synced(&dir, &peer).await {
+                if !self
+                    .state
+                    .is_directory_synced(dir.id.clone(), peer.id.unwrap())
+                    .await
+                {
                     continue;
                 }
                 let index = items::Index {
@@ -189,7 +192,7 @@ impl PeerConnection {
                         .collect(),
                     last_sequence: 0,
                 };
-                log::info!("{}: Sending index: {:?}", self.get_name(), index);
+                log::info!("{}: Sending index: {:?}", self.get_name().await, index);
                 self.submit_message(index.encode_for_bep()).await;
             }
             return Ok(());
@@ -260,9 +263,7 @@ impl PeerConnection {
                         o.write_all(response.data.as_slice())?;
                         let mut sync_file = sync_file.to_owned();
                         sync_file.synced_version = sync_file.get_index_version();
-                        self.state
-                            .update_sync_file(directory.clone(), sync_file)
-                            .await;
+                        self.state.update_sync_file(&directory, &sync_file).await;
                     }
                     Some(items::ErrorCode::NoSuchFile) => {
                         return Err(PeerCommandError::NoSuchFile);
@@ -300,23 +301,27 @@ impl PeerConnection {
     }
 
     pub async fn get_directory(&self, directory: &SyncDirectory) -> Result<(), PeerCommandError> {
-        log::info!("{}: Syncing directory {}", self.get_name(), directory.label);
+        log::info!(
+            "{}: Syncing directory {}",
+            self.get_name().await,
+            directory.label
+        );
         let index = directory.get_index(self.state.clone()).await;
 
         for file in &index {
             if file.synced_version < file.get_index_version() {
-                log::info!("{}: we want a file {:?}", self.get_name(), file.path);
+                log::info!("{}: we want a file {:?}", self.get_name().await, file.path);
                 self.get_file(directory, file).await?;
             }
         }
-        log::info!("{}: Syncing complete", self.get_name());
+        log::info!("{}: Syncing complete", self.get_name().await);
         Ok(())
     }
 
-    pub fn get_name(&self) -> String {
-        self.name
-            .get_or_init(|| self.state.state.lock().unwrap().get_name())
-            .clone()
+    pub async fn get_name(&self) -> String {
+        // TODO: Terrible
+        let state_name = self.state.get_name().await;
+        self.name.get_or_init(|| state_name).clone()
     }
 
     pub async fn submit_message(&self, msg: Vec<u8>) {
@@ -324,7 +329,7 @@ impl PeerConnection {
         if let Err(e) = r {
             log::error!(
                 "{}: Tried to submit a request after server was closed: {}",
-                self.get_name(),
+                self.get_name().await,
                 e
             );
         }
@@ -355,7 +360,7 @@ impl PeerConnection {
         if let Err(e) = r {
             log::error!(
                 "{}: Tried to submit a request after server was closed: {}",
-                self.get_name(),
+                self.get_name().await,
                 e
             );
         }
@@ -364,7 +369,7 @@ impl PeerConnection {
             Err(e) => {
                 log::error!(
                     "{}: Got error while closing connection {}",
-                    self.get_name(),
+                    self.get_name().await,
                     e
                 );
                 Err(io::Error::new(
@@ -380,8 +385,8 @@ impl PeerConnection {
     }
 
     /// Get the peer this connection is to
-    pub fn get_peer(&self) -> Option<Peer> {
-        let peers = self.state.state.lock().unwrap().get_peers();
+    pub async fn get_peer(&self) -> Option<Peer> {
+        let peers = self.state.get_peers().await;
         let peer_id = self.peer_id.as_ref().get().unwrap().clone();
         // TODO: Check properly
         peers
@@ -424,9 +429,13 @@ impl PeerConnection {
     pub async fn directory_updated(&self, directory: &SyncDirectory) {
         directory.generate_index(&self.state).await;
         let mut synced_index_updated = false;
-        if let Some(peer) = self.get_peer() {
+        if let Some(peer) = self.get_peer().await {
             if let Some(directory) = self.state.get_sync_directory(&directory.id.clone()).await {
-                if self.state.is_directory_synced(&directory, &peer).await {
+                if self
+                    .state
+                    .is_directory_synced(directory.id, peer.id.unwrap())
+                    .await
+                {
                     synced_index_updated = true;
                 }
             }
@@ -437,7 +446,7 @@ impl PeerConnection {
     }
 
     pub async fn close_reason(&self, reason: String) -> tokio::io::Result<()> {
-        log::info!("{}: Connection close requested", self.get_name());
+        log::info!("{}: Connection close requested", self.get_name().await);
         let message = items::Close { reason }.encode_for_bep();
         self.submit_request(-1, PeerRequestResponseType::WhenSent, message)
             .await?;
@@ -456,17 +465,17 @@ impl PeerConnection {
         .await
     }
 
-    pub fn get_peer_name(&self) -> Option<String> {
-        self.get_peer().map(|x| x.name)
+    pub async fn get_peer_name(&self) -> Option<String> {
+        self.get_peer().await.map(|x| x.name)
     }
 
     pub fn watch(&mut self) {
         let pc_clone = self.clone();
         self.task_tracker.spawn(async move {
             if let Err(e) = watcher::watch(pc_clone.clone()).await {
-                log::error!("{}: Watcher error: {}", pc_clone.get_name(), e);
+                log::error!("{}: Watcher error: {}", pc_clone.get_name().await, e);
             }
-            log::info!("{}: Shut down watcher", pc_clone.get_name());
+            log::info!("{}: Shut down watcher", pc_clone.get_name().await);
         });
     }
 }

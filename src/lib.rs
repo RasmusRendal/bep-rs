@@ -1,6 +1,6 @@
 #[macro_use]
 pub mod sync_directory;
-pub mod bep_state;
+mod bep_state;
 pub mod bep_state_reference;
 pub mod daemon;
 pub mod device_id;

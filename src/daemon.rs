@@ -1,7 +1,6 @@
 use crate::bep_state_reference::BepStateRef;
 use crate::peer_connection::error::PeerConnectionError;
 
-use super::models::Peer;
 use log;
 use std::error::Error;
 use std::{thread, time};
@@ -37,17 +36,11 @@ impl Daemon {
     /// as defined by the client state, in a loop
     pub async fn run(&mut self) -> Result<i32, Box<dyn Error>> {
         loop {
-            let mut peers: Option<Vec<Peer>> = None;
-            if let Ok(mut l) = self.state.state.lock() {
-                peers = Some(l.get_peers());
-            }
-            if let Some(list) = peers {
-                for peer in list {
-                    let addrs = self.state.state.lock().unwrap().get_addresses(peer);
+            for peer in self.state.get_peers().await {
+                let addrs = self.state.get_addresses(peer).await;
 
-                    for addr in addrs {
-                        connect_to_server(self.state.clone(), addr).await?;
-                    }
+                for addr in addrs {
+                    connect_to_server(self.state.clone(), addr).await?;
                 }
             }
             thread::sleep(time::Duration::from_millis(2000));
