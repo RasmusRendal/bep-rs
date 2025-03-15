@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct BepStateRef {
-    pub state: Arc<Mutex<BepState>>,
+    state: Arc<Mutex<BepState>>,
 }
 
 impl BepStateRef {

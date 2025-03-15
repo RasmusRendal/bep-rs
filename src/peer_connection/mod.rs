@@ -96,12 +96,6 @@ impl PeerConnection {
         };
         let peer_connectionc = peer_connection.clone();
         tokio::spawn(async move {
-            state
-                .state
-                .lock()
-                .await
-                .listeners
-                .push(peer_connection.clone());
             if let Err(e) = handle_connection(
                 socket,
                 peer_connection.clone(),

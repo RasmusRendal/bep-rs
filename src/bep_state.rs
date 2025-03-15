@@ -1,5 +1,4 @@
 use super::models::*;
-use super::peer_connection::PeerConnection;
 use super::sync_directory;
 use diesel::prelude::*;
 use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
@@ -14,7 +13,6 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations/");
 pub struct BepState {
     pub data_directory: PathBuf,
     connection: SqliteConnection,
-    pub listeners: Vec<PeerConnection>,
 }
 
 fn from_i64(i: i64) -> u64 {
@@ -59,7 +57,6 @@ impl BepState {
         let mut s = BepState {
             data_directory,
             connection,
-            listeners: vec![],
         };
         if !s.is_initialized() {
             use crate::schema::device_options;

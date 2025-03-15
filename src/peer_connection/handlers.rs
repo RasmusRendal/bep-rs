@@ -590,15 +590,6 @@ pub async fn handle_connection(
 
     peer_connection.task_tracker.wait().await;
 
-    // Remove from list of listeners
-    peer_connection
-        .state
-        .state
-        .lock()
-        .await
-        .listeners
-        .retain(|x| !x.tx.same_channel(&peer_connection.tx));
-
     log::info!("{}: Shutting down server", peer_connection.get_name().await);
     Ok(())
 }
