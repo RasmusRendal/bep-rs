@@ -1,18 +1,29 @@
+use crate::DeviceID;
+
 use super::models::*;
 use super::sync_directory;
 use diesel::prelude::*;
 use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
 use std::fs;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations/");
+
+pub type BepEventHandler<Args> =
+    Option<Arc<dyn Fn(Args) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>>;
+
+pub type NewFolderHandler = BepEventHandler<(String, DeviceID)>;
 
 /// This structure maintains the state of a bep
 /// client
 pub struct BepState {
     pub data_directory: PathBuf,
     connection: SqliteConnection,
+    new_folder_handler: NewFolderHandler,
 }
 
 fn from_i64(i: i64) -> u64 {
@@ -57,6 +68,7 @@ impl BepState {
         let mut s = BepState {
             data_directory,
             connection,
+            new_folder_handler: None,
         };
         if !s.is_initialized() {
             use crate::schema::device_options;
@@ -417,6 +429,18 @@ impl BepState {
             .unwrap()
     }
 
+    pub fn get_peer_by_id(&mut self, dev_id: DeviceID) -> Peer {
+        use crate::schema::peers::dsl::*;
+        let bytes: Vec<u8> = dev_id.to_vec();
+        peers
+            .filter(device_id.eq(bytes))
+            .limit(1)
+            .load::<Peer>(&mut self.connection)
+            .unwrap()
+            .pop()
+            .unwrap()
+    }
+
     pub fn add_peer_vec_id(&mut self, peer_name: String, peer_id: Vec<u8>) -> Peer {
         let boxed_slice = peer_id.into_boxed_slice();
         let boxed_array: Box<[u8; 32]> = match boxed_slice.try_into() {
@@ -475,5 +499,18 @@ impl BepState {
             .load::<FolderShare>(&mut self.connection)
             .map(|x| !x.is_empty())
             .unwrap_or(false)
+    }
+
+    pub fn new_folder(&self, name: String, device: DeviceID) {
+        if let Some(handler) = &self.new_folder_handler {
+            let h = handler.clone();
+            tokio::spawn(async move {
+                h((name, device)).await;
+            });
+        }
+    }
+
+    pub fn set_new_folder_handler(&mut self, handler: NewFolderHandler) {
+        self.new_folder_handler = handler;
     }
 }

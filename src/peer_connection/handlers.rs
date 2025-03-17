@@ -141,11 +141,11 @@ async fn handle_index(
     peer_connection: PeerConnection,
 ) -> tokio::io::Result<()> {
     log::info!("{}: Handling index", peer_connection.get_name().await);
-    let syncdir = peer_connection
-        .state
-        .get_sync_directory(&folder)
-        .await
-        .unwrap();
+    let syncdir = peer_connection.state.get_sync_directory(&folder).await;
+    if syncdir.is_none() {
+        return Ok(());
+    }
+    let syncdir = syncdir.unwrap();
     let mut localindex = syncdir.get_index(peer_connection.state.clone()).await;
     for file in files {
         log::info!(
@@ -345,10 +345,24 @@ async fn handle_reading(
             let _ = items::receive_message::<items::Ping>(stream, compression).await?;
             log::info!("{}: Received a ping", peer_connection.get_name().await);
         } else if header.r#type == items::MessageType::ClusterConfig as i32 {
-            let _cluster_config =
+            let cluster_config =
                 items::receive_message::<items::ClusterConfig>(stream, compression).await?;
-            log::info!("{}: We have received a cluster config. Your peer might have folders or other peers to share with you", peer_connection.get_name().await);
-            //TODO: Actually use this for something
+            for folder in cluster_config.folders {
+                peer_connection
+                    .state
+                    .new_folder(
+                        folder.label,
+                        peer_connection
+                            .get_peer()
+                            .await
+                            .unwrap()
+                            .device_id
+                            .unwrap()
+                            .try_into()
+                            .unwrap(),
+                    )
+                    .await;
+            }
         } else {
             log::error!(
                 "{}: Got unknown message type {}",

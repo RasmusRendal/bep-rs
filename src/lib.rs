@@ -9,3 +9,5 @@ pub mod peer_connection;
 pub mod schema;
 pub mod server;
 pub mod util;
+
+pub type DeviceID = [u8; 32];

@@ -1,4 +1,8 @@
-use crate::{bep_state::BepState, models::Peer, sync_directory};
+use crate::{
+    bep_state::{BepState, NewFolderHandler},
+    models::Peer,
+    sync_directory, DeviceID,
+};
 use ring::signature::EcdsaKeyPair;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
@@ -8,6 +12,7 @@ pub struct BepStateRef {
     state: Arc<Mutex<BepState>>,
 }
 
+// TODO: This whole thing could probably be a procedural macro
 impl BepStateRef {
     pub fn from_bepstate(state: BepState) -> Self {
         BepStateRef {
@@ -54,7 +59,7 @@ impl BepStateRef {
         self.state.lock().await.update_sync_file(dir, file)
     }
 
-    pub async fn get_id(&self) -> [u8; 32] {
+    pub async fn get_id(&self) -> DeviceID {
         self.state.lock().await.get_id()
     }
 
@@ -84,6 +89,10 @@ impl BepStateRef {
 
     pub async fn get_peers(&self) -> Vec<Peer> {
         self.state.lock().await.get_peers()
+    }
+
+    pub async fn get_peer_by_id(&self, dev_id: DeviceID) -> Peer {
+        self.state.lock().await.get_peer_by_id(dev_id)
     }
 
     pub async fn get_addresses(&self, peer: Peer) -> Vec<String> {
@@ -131,5 +140,13 @@ impl BepStateRef {
 
     pub async fn is_directory_synced(&self, directory: String, peer: i32) -> bool {
         self.state.lock().await.is_directory_synced(directory, peer)
+    }
+
+    pub async fn new_folder(&self, name: String, device: DeviceID) {
+        self.state.lock().await.new_folder(name, device)
+    }
+
+    pub async fn set_new_folder_handler(&mut self, handler: NewFolderHandler) {
+        self.state.lock().await.set_new_folder_handler(handler)
     }
 }

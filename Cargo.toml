@@ -25,6 +25,7 @@ data-encoding = "2.6.0"
 tokio-util = { version = "0.7.13", features = ["rt"] }
 lz4_flex = "0.11.3"
 notify = "7.0.0"
+async-trait = "0.1.88"
 
 [build-dependencies]
 prost-build = "0.11"
