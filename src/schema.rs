@@ -69,7 +69,7 @@ diesel::table! {
     sync_folders (id) {
         id -> Nullable<Text>,
         label -> Text,
-        dir_path -> Text,
+        dir_path -> Nullable<Text>,
     }
 }
 

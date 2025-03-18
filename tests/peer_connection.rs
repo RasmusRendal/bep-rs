@@ -7,6 +7,7 @@ use bep_rs::sync_directory::SyncFile;
 use bep_rs::DeviceID;
 use error::PeerCommandError;
 use error::PeerConnectionError;
+use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
@@ -39,12 +40,25 @@ struct TestStruct {
 
 impl TestStruct {
     pub async fn new() -> Self {
-        let statedir1 = tempfile::tempdir().unwrap().into_path();
+        let test_dir = PathBuf::from(tempfile::tempdir().unwrap().path());
+        fs::create_dir(test_dir.clone()).unwrap();
+        let mut statedir1 = test_dir.clone();
+        statedir1.push("statedir1");
+        let mut statedir2 = test_dir.clone();
+        statedir2.push("statedir2");
+
         let state1 = BepStateRef::new(statedir1.clone());
         state1.set_name("con1".to_string()).await;
-        let statedir2 = tempfile::tempdir().unwrap().into_path();
         let state2 = BepStateRef::new(statedir2.clone());
         state2.set_name("con2".to_string()).await;
+
+        let mut peer1dirpath = test_dir.clone();
+        peer1dirpath.push("peer1dir");
+        fs::create_dir(peer1dirpath.clone()).unwrap();
+
+        let mut peer2dirpath = test_dir.clone();
+        peer2dirpath.push("peer2dir");
+        fs::create_dir(peer2dirpath.clone()).unwrap();
 
         TestStruct {
             state1,
@@ -53,8 +67,8 @@ impl TestStruct {
             conn2: None,
             peer1: None,
             peer2: None,
-            peer1dirpath: tempfile::tempdir().unwrap().into_path(),
-            peer2dirpath: tempfile::tempdir().unwrap().into_path(),
+            peer1dirpath,
+            peer2dirpath,
             peer1dir: None,
             peer2dir: None,
         }
@@ -100,6 +114,8 @@ impl TestStruct {
                 )
                 .await,
         );
+        log::info!("We have assigned {:?} to connection1", self.peer1dirpath);
+        log::info!("We have assigned {:?} to connection2", self.peer2dirpath);
     }
 
     pub async fn connect_sync_dirs(&mut self) {
@@ -117,6 +133,7 @@ impl TestStruct {
             .await;
     }
 
+    /// Writes `contents` to `FILE_NAME` in `peer2dir`
     pub fn write_hello_file(&mut self, contents: &str) {
         let mut helloworld = self.peer2dirpath.clone();
         helloworld.push(FILE_NAME);
@@ -191,11 +208,11 @@ async fn test_get_nonexistent_file() -> io::Result<()> {
     dstfile.push(FILE_NAME);
     let file = SyncFile {
         id: None,
-        path: dstfile.clone(),
+        path: PathBuf::from(FILE_NAME),
         hash: FILE_HASH.to_vec(),
         modified_by: 0,
         synced_version: 0,
-        versions: vec![(1, 1)],
+        versions: vec![(test_struct.state2.get_short_id().await, 0)],
         blocks: vec![SyncBlock {
             offset: 0,
             size: FILE_SIZE1,
@@ -233,11 +250,11 @@ async fn test_get_file() -> io::Result<()> {
     dstfile.push(FILE_NAME);
     let file = SyncFile {
         id: None,
-        path: dstfile.clone(),
+        path: PathBuf::from(FILE_NAME),
         hash: FILE_HASH.to_vec(),
         modified_by: 0,
         synced_version: 0,
-        versions: vec![(1, 1)],
+        versions: vec![(test_struct.state2.get_short_id().await, 0)],
         blocks: vec![SyncBlock {
             offset: 0,
             size: FILE_SIZE1,
@@ -278,11 +295,11 @@ async fn test_nonsynced_directory() -> io::Result<()> {
     dstfile.push(FILE_NAME);
     let file = SyncFile {
         id: None,
-        path: dstfile.clone(),
+        path: PathBuf::from(FILE_NAME),
         hash: FILE_HASH.to_vec(),
         modified_by: 0,
         synced_version: 0,
-        versions: vec![(1, 1)],
+        versions: vec![(test_struct.state2.get_short_id().await, 0)],
         blocks: vec![SyncBlock {
             offset: 0,
             size: FILE_SIZE1,
@@ -383,6 +400,8 @@ async fn test_update_file() -> io::Result<()> {
         .await
         .unwrap();
 
+    // Now we requets the file from the peer
+
     let mut dstfile = test_struct.peer1dirpath.clone();
     dstfile.push("testfile");
     let file = File::open(dstfile);
@@ -395,16 +414,11 @@ async fn test_update_file() -> io::Result<()> {
 
     log::info!("Successfully synced the first file");
 
+    // Now we overwrite the file ourselves, and notify our peer
+
     test_struct.write_hello_file(FILE_CONTENTS2);
 
     log::info!("Generating second index");
-    test_struct
-        .peer2dir
-        .as_ref()
-        .unwrap()
-        .generate_index(&test_struct.state2)
-        .await;
-
     connection2
         .directory_updated(test_struct.peer1dir.as_ref().unwrap())
         .await;
@@ -433,6 +447,10 @@ async fn test_update_file() -> io::Result<()> {
         .generate_index(&test_struct.state1)
         .await;
 
+    assert_eq!(i.len(), 1);
+    for v in &i[0].versions {
+        log::info!("Version {} was authored by {}", v.1, v.0);
+    }
     assert_eq!(i[0].versions.len(), 2);
 
     // Sync the file modified in dstdir to srcdir

@@ -10,6 +10,8 @@ use prost::Message;
 use ring::digest;
 use std::fs::File;
 use std::io::{self, BufReader, Read};
+use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::mpsc::Receiver;
@@ -54,7 +56,21 @@ async fn handle_request(
     }
 
     let dir = dir.unwrap();
-    let mut path = dir.path.clone();
+    let path = dir.path.clone();
+    if path.is_none() {
+        peer_connection
+            .submit_message(
+                items::Response {
+                    id: request.id,
+                    data: vec![],
+                    code: items::ErrorCode::NoSuchFile as i32,
+                }
+                .encode_for_bep(),
+            )
+            .await;
+        return Ok(());
+    }
+    let mut path = path.unwrap();
     path.push(request.name.clone());
     let fh = File::open(path);
     if fh.is_err() {
@@ -128,10 +144,7 @@ async fn handle_response(
         assert!(r.is_ok());
         Ok(())
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Received unsolicited response",
-        ))
+        Err(io::Error::other("Received unsolicited response"))
     }
 }
 
@@ -153,9 +166,7 @@ async fn handle_index(
             peer_connection.get_name().await,
             file.name
         );
-        let localfile = localindex
-            .iter_mut()
-            .find(|x| x.get_name(&syncdir) == file.name);
+        let localfile = localindex.iter_mut().find(|x| x.get_name() == file.name);
         if localfile.is_some() {
             let localfile: &mut SyncFile = localfile.unwrap();
             if localfile.versions.len() >= file.version.as_ref().unwrap().counters.len() {
@@ -186,7 +197,7 @@ async fn handle_index(
             localfile.modified_by = file.modified_by;
             peer_connection
                 .state
-                .update_sync_file(&syncdir, &localfile)
+                .update_sync_file(&syncdir, localfile)
                 .await;
         } else {
             log::info!(
@@ -194,8 +205,7 @@ async fn handle_index(
                 peer_connection.get_name().await,
                 file.name
             );
-            let mut path = syncdir.path.clone();
-            path.push(file.name.clone());
+            let path = PathBuf::from_str(&file.name).unwrap();
             let syncfile = SyncFile {
                 id: None,
                 path,

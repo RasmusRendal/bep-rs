@@ -17,10 +17,14 @@ pub struct SyncBlock {
 #[derive(Clone, Debug)]
 pub struct SyncFile {
     pub id: Option<i32>,
+    /// Relative to the directory
     pub path: PathBuf,
     pub hash: Vec<u8>,
     pub modified_by: u64,
     pub synced_version: u64,
+    /// A version consists of the device ID of the version author,
+    /// and an incrementing counter, starting at zero. I don't know
+    /// why we have the counter, but it's part of the BEP spec.
     pub versions: Vec<(u64, u64)>,
     pub blocks: Vec<SyncBlock>,
 }
@@ -29,8 +33,9 @@ pub struct SyncFile {
 #[derive(Clone, Debug)]
 pub struct SyncDirectory {
     pub id: String,
+    /// Human-readable name. By default, just the name of the directory.
     pub label: String,
-    pub path: PathBuf,
+    pub path: Option<PathBuf>,
 }
 
 fn comp_hashes(h1: &[u8], h2: &[u8]) -> bool {
@@ -46,24 +51,45 @@ fn comp_hashes(h1: &[u8], h2: &[u8]) -> bool {
 }
 
 impl SyncDirectory {
+    /// Generates an index of the directory, based on the files on disk.
+    /// Updates the database with new versions.
     pub async fn generate_index(&self, state: &BepStateRef) -> Vec<SyncFile> {
         // TODO: Handle errors in some manner
+        log::info!("Generating index of directory {}", self.label);
         let short_id = state.get_short_id().await;
-        let path = self.path.clone();
         let mut sync_files = state.get_sync_files(&self.id).await;
         let mut out_files: Vec<SyncFile> = Vec::new();
+        let path = self.path.as_ref().unwrap();
         for file in path.read_dir().unwrap().flatten() {
             let mut buf_reader = BufReader::new(File::open(file.path()).unwrap());
             let mut data = Vec::new();
             buf_reader.read_to_end(&mut data).unwrap();
             let hash = digest::digest(&digest::SHA256, &data).as_ref().to_vec();
 
-            match sync_files.iter_mut().find(|x| x.path == file.path()) {
+            let mut abs_path = path.clone();
+            abs_path.push(file.path());
+
+            match sync_files.iter_mut().find(|x| x.path == file.file_name()) {
                 Some(index_file) => {
                     assert!(!index_file.versions.is_empty());
-                    if index_file.versions.last().unwrap().1 == index_file.synced_version
-                        && !comp_hashes(&hash, &index_file.hash)
-                    {
+
+                    for v in &index_file.versions {
+                        log::info!("Version {} was authored by {}", v.1, v.0);
+                    }
+                    log::info!("We are on version {}", index_file.synced_version);
+                    // If we do not have the latest version of a file, we ignore any changes made locally
+                    if index_file.versions.last().unwrap().1 > index_file.synced_version {
+                        out_files.push(index_file.clone());
+                        continue;
+                    }
+
+                    if !comp_hashes(&hash, &index_file.hash) {
+                        log::info!("We have a new version of the file.");
+                        log::info!(
+                            "The previous hash was {:x?} while the current hash is {:x?}",
+                            index_file.hash,
+                            hash
+                        );
                         let vnumber = index_file.versions.last().unwrap().1 + 1;
                         index_file.synced_version = vnumber;
                         index_file.versions.push((short_id, vnumber));
@@ -75,11 +101,11 @@ impl SyncDirectory {
                 None => {
                     out_files.push(SyncFile {
                         id: None,
-                        path: file.path().clone(),
+                        path: PathBuf::from(file.file_name()),
                         hash: hash.clone(),
                         modified_by: short_id,
-                        synced_version: 1,
-                        versions: vec![(short_id, 1)],
+                        synced_version: 0,
+                        versions: vec![(short_id, 0)],
                         blocks: vec![SyncBlock {
                             offset: 0,
                             size: data.len() as i32,
@@ -106,8 +132,10 @@ impl SyncDirectory {
 }
 
 impl SyncFile {
-    pub fn gen_blocks(&self) -> Vec<SyncBlock> {
-        let path = self.path.clone();
+    /// For a file on disk, generate a set of SyncBlocks
+    pub fn gen_blocks(&self, dir: &SyncDirectory) -> Vec<SyncBlock> {
+        let mut path = dir.path.as_ref().unwrap().clone();
+        path.push(&self.path);
         let h = File::open(path).unwrap();
         let len = h.metadata().unwrap().len() as u32;
         // Here we may use only one block.
@@ -145,10 +173,11 @@ impl SyncFile {
         self.blocks.iter().fold(0, |acc, b| acc + (b.size as u64))
     }
 
-    pub fn get_name(&self, directory: &SyncDirectory) -> String {
+    /// Gets the `name` as formatted in BEP. That means the path of the file,
+    /// relative to the sync directory, separated by / regardless of OS
+    pub fn get_name(&self) -> String {
         self.path
             .components()
-            .skip(directory.path.components().count())
             .fold("".to_string(), |acc, x| {
                 acc + "/" + x.as_os_str().to_str().unwrap()
             })
@@ -188,20 +217,13 @@ mod tests {
             .await;
         assert!(index.len() == 1);
         let fileinfo = index.pop().unwrap();
-        assert!(fileinfo.path == helloworld);
+        assert!(fileinfo.path == PathBuf::from(filename));
         assert!(fileinfo.hash == hash);
     }
 
     #[test]
     fn test_get_name() {
-        let path = tempfile::tempdir().unwrap().into_path();
-        let directory = SyncDirectory {
-            id: "someid".to_string(),
-            label: "dir".to_string(),
-            path: path.clone(),
-        };
-
-        let mut filepath = path.clone();
+        let mut filepath = PathBuf::new();
         filepath.push("somefile");
         let file = SyncFile {
             id: None,
@@ -217,7 +239,7 @@ mod tests {
             }],
         };
 
-        assert!(file.get_name(&directory) == "somefile");
+        assert_eq!(file.get_name(), "somefile");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -233,6 +255,8 @@ mod tests {
         let filename = "testfile";
         let hash1: Vec<u8> = b"\xb9\x4d\x27\xb9\x93\x4d\x3e\x08\xa5\x2e\x52\xd7\xda\x7d\xab\xfa\xc4\x84\xef\xe3\x7a\x53\x80\xee\x90\x88\xf7\xac\xe2\xef\xcd\xe9".to_vec();
         let hash2: Vec<u8> = b"\xb9\x59\x57\xc2\x9f\xf5\xe0\xea\xb4\x0c\x20\xcb\xc4\x41\xe8\x6d\x81\xb5\xad\x1a\x59\x19\x99\x36\x7b\xa1\x8c\x9b\x4d\xa7\xab\xae".to_vec();
+        let mut relpath = PathBuf::new();
+        relpath.push(filename);
 
         let path = tempfile::tempdir().unwrap().into_path();
         let mut helloworld = path.clone();
@@ -244,46 +268,52 @@ mod tests {
 
         let directory = state.add_sync_directory(path.clone(), None).await;
 
+        // Generate the first index
         let mut index = directory.generate_index(&state).await;
-        assert!(index.len() == 1);
+        assert_eq!(index.len(), 1);
         let mut fileinfo = index.pop().unwrap();
-        assert!(fileinfo.path == helloworld);
-        assert!(fileinfo.hash == hash1);
-        assert!(fileinfo.versions.len() == 1);
+        assert_eq!(fileinfo.path, relpath);
+        assert_eq!(fileinfo.hash, hash1);
+        assert_eq!(fileinfo.versions.len(), 1);
         let fileversion = fileinfo.versions.pop().unwrap();
-        assert!(fileversion.0 == state.get_short_id().await);
-        assert!(fileversion.1 == 1);
+        assert_eq!(fileversion.0, state.get_short_id().await);
+        assert_eq!(fileversion.1, 0);
         log::info!("Successfully generated first index");
 
+        // Call the generate index again. Since we have not changed the file,
+        // nothing should have changed.
         let mut index = directory.generate_index(&state).await;
-        assert!(index.len() == 1);
+        assert_eq!(index.len(), 1);
         let mut fileinfo = index.pop().unwrap();
-        assert!(fileinfo.path == helloworld);
-        assert!(fileinfo.hash == hash1);
-        assert!(fileinfo.versions.len() == 1);
+        assert_eq!(fileinfo.path, relpath);
+        assert_eq!(fileinfo.hash, hash1);
+        assert_eq!(fileinfo.versions.len(), 1);
         let fileversion = fileinfo.versions.pop().unwrap();
-        assert!(fileversion.0 == state.get_short_id().await);
-        assert!(fileversion.1 == 1);
+        assert_eq!(fileversion.0, state.get_short_id().await);
+        assert_eq!(fileversion.1, 0);
         log::info!("Successfully generated second index");
 
+        // Change the file, and create a third index. This one should have
+        // two versions.
         {
             let mut o = File::create(helloworld.clone()).unwrap();
             o.write_all(file_contents2.as_bytes()).unwrap();
         }
 
         let mut index = directory.generate_index(&state).await;
-        assert!(index.len() == 1);
+        assert_eq!(index.len(), 1);
         let mut fileinfo = index.pop().unwrap();
-        assert!(fileinfo.path == helloworld);
+        assert_eq!(fileinfo.path, relpath);
         assert_eq!(fileinfo.hash, hash2);
+        assert_eq!(fileinfo.synced_version, 1);
 
-        assert!(fileinfo.versions.len() == 2);
+        assert_eq!(fileinfo.versions.len(), 2);
         let fileversion = fileinfo.versions.pop().unwrap();
-        assert!(fileversion.0 == state.get_short_id().await);
-        assert!(fileversion.1 == 2);
+        assert_eq!(fileversion.0, state.get_short_id().await);
+        assert_eq!(fileversion.1, 1);
         let fileversion = fileinfo.versions.pop().unwrap();
-        assert!(fileversion.0 == state.get_short_id().await);
-        assert!(fileversion.1 == 1);
+        assert_eq!(fileversion.0, state.get_short_id().await);
+        assert_eq!(fileversion.1, 0);
 
         log::info!("Successfully generated third index");
     }

@@ -14,9 +14,16 @@ pub struct DeviceOption {
 
 #[derive(Queryable, Insertable)]
 pub struct SyncFolder {
+    /// A UUID for the folder. Should be globally unique.
     pub id: Option<String>,
+    /// A human-readable label.
     pub label: String,
-    pub dir_path: String,
+    // If dir_path is null, we are only collecting the metadata,
+    // and not requesting any files
+    /// This may contain an absolute path on the operating system, or None.
+    /// A None value implies that this is a directory that peer has informed
+    /// us about, but we aren't interested in storing the associated files.
+    pub dir_path: Option<String>,
 }
 
 #[derive(Identifiable, Queryable, Insertable)]

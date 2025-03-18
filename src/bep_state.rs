@@ -38,7 +38,7 @@ fn model_to_sync_dir(folder: SyncFolder) -> sync_directory::SyncDirectory {
     sync_directory::SyncDirectory {
         id: folder.id.clone().unwrap(),
         label: folder.label.clone(),
-        path: PathBuf::from(folder.dir_path.clone()),
+        path: folder.dir_path.as_ref().map(PathBuf::from),
     }
 }
 
@@ -136,7 +136,7 @@ impl BepState {
             .map(|x| sync_directory::SyncDirectory {
                 id: x.id.clone().unwrap(),
                 label: x.label.clone(),
-                path: PathBuf::from(x.dir_path.clone()),
+                path: x.dir_path.as_ref().map(PathBuf::from),
             })
             .collect::<Vec<_>>()
     }
@@ -179,15 +179,13 @@ impl BepState {
 
     pub fn get_sync_files(&mut self, dir_id: &String) -> Vec<sync_directory::SyncFile> {
         use super::schema::sync_files::dsl::*;
-        let dir = self.get_sync_directory(dir_id).unwrap();
         sync_files
             .filter(folder_id.eq(dir_id))
             .load::<SyncFile>(&mut self.connection)
             .unwrap()
             .iter()
             .map(|x| {
-                let mut path = dir.path.clone();
-                path.push(x.name.clone());
+                let path = PathBuf::from(&x.name);
                 let dir = sync_directory::SyncFile {
                     id: x.id,
                     path,
@@ -216,7 +214,7 @@ impl BepState {
         assert!(!file.versions.is_empty());
         let sync_file = SyncFile {
             id: file.id,
-            name: file.get_name(dir),
+            name: file.get_name(),
             modified_by: from_u64(file.modified_by),
             sequence: from_u64(0),
             synced_version_id: from_u64(file.synced_version),
@@ -299,11 +297,11 @@ impl BepState {
         self.get_options().is_some()
     }
 
-    pub fn get_id(&mut self) -> [u8; 32] {
+    pub fn get_id(&mut self) -> DeviceID {
         use ring::digest;
         let cert = self.get_options().unwrap().cert;
         let hash = digest::digest(&digest::SHA256, &cert);
-        let hashbox: Box<[u8; 32]> = hash
+        let hashbox: Box<DeviceID> = hash
             .as_ref()
             .to_owned()
             .into_boxed_slice()
@@ -312,6 +310,8 @@ impl BepState {
         *hashbox
     }
 
+    /// By the spec, returns an integer representing the first 64 bits of the
+    /// device ID.
     pub fn get_short_id(&mut self) -> u64 {
         u64::from_ne_bytes(self.get_id()[0..8].try_into().unwrap())
     }
@@ -389,7 +389,6 @@ impl BepState {
             .expect("Error deleting folder");
     }
 
-    /// Start syncing some directory
     pub fn add_sync_directory(
         &mut self,
         path: PathBuf,
@@ -408,7 +407,7 @@ impl BepState {
         let new_dir = SyncFolder {
             id: Some(folder_id.clone()),
             label: path.file_name().unwrap().to_owned().into_string().unwrap(),
-            dir_path: path.display().to_string(),
+            dir_path: Some(path.display().to_string()),
         };
 
         diesel::insert_into(sync_folders::table)

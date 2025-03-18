@@ -37,12 +37,14 @@ pub async fn watch(peer_connection: PeerConnection) -> Result<(), notify::Error>
             .is_directory_synced(dir.id.clone(), peer.id.unwrap())
             .await
         {
-            watcher.watch(&dir.path, RecursiveMode::Recursive)?;
-            log::info!(
-                "{} Watching {:?}",
-                peer_connection.get_name().await,
-                dir.path
-            );
+            if let Some(path) = &dir.path {
+                watcher.watch(path, RecursiveMode::Recursive)?;
+                log::info!(
+                    "{} Watching {:?}",
+                    peer_connection.get_name().await,
+                    dir.path
+                );
+            }
         }
     }
     let cancellation_token = peer_connection.cancellation_token.clone();

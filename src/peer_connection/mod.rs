@@ -142,7 +142,7 @@ impl PeerConnection {
                         .await
                         .iter()
                         .map(|x| items::FileInfo {
-                            name: x.get_name(&dir),
+                            name: x.get_name(),
                             r#type: items::FileInfoType::File as i32,
                             size: x.get_size() as i64,
                             permissions: 0,
@@ -165,7 +165,7 @@ impl PeerConnection {
                             sequence: 1,
                             block_size: x.get_size() as i32,
                             blocks: x
-                                .gen_blocks()
+                                .gen_blocks(&dir)
                                 .iter()
                                 .map(|y| items::BlockInfo {
                                     offset: 0,
@@ -191,10 +191,7 @@ impl PeerConnection {
             }
             return Ok(());
         }
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Peer not yet received",
-        ))
+        Err(io::Error::other("Peer not yet received"))
     }
 
     pub async fn get_file(
@@ -214,7 +211,7 @@ impl PeerConnection {
             ));
         }
         let block = &sync_file.blocks[0];
-        let name = sync_file.get_name(directory);
+        let name = sync_file.get_name();
 
         // TODO: Support bigger files
         let message = items::Request {
@@ -250,14 +247,21 @@ impl PeerConnection {
                             return Err(PeerCommandError::InvalidFile);
                         }
 
-                        let mut file = directory.path.clone();
-                        file.push(sync_file.get_name(directory));
+                        let file = directory.path.clone();
+                        if file.is_none() {
+                            return Err(PeerCommandError::Other(
+                                "Requesting file from non-synced directory".to_string(),
+                            ));
+                        }
+                        let mut file = file.unwrap();
+
+                        file.push(sync_file.get_name());
                         log::info!("Writing to path {:?}", file);
                         let mut o = File::create(file)?;
                         o.write_all(response.data.as_slice())?;
                         let mut sync_file = sync_file.to_owned();
                         sync_file.synced_version = sync_file.get_index_version();
-                        self.state.update_sync_file(&directory, &sync_file).await;
+                        self.state.update_sync_file(directory, &sync_file).await;
                     }
                     Some(items::ErrorCode::NoSuchFile) => {
                         return Err(PeerCommandError::NoSuchFile);
@@ -303,7 +307,9 @@ impl PeerConnection {
         let index = directory.get_index(self.state.clone()).await;
 
         for file in &index {
-            if file.synced_version < file.get_index_version() {
+            let mut path = directory.path.as_ref().unwrap().clone();
+            path.push(&file.path);
+            if !path.exists() || file.synced_version < file.get_index_version() {
                 log::info!("{}: we want a file {:?}", self.get_name().await, file.path);
                 self.get_file(directory, file).await?;
             }
@@ -366,8 +372,7 @@ impl PeerConnection {
                     self.get_name().await,
                     e
                 );
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
+                Err(io::Error::other(
                     "Got an error while trying to close connection",
                 ))
             }
@@ -388,6 +393,7 @@ impl PeerConnection {
             .find(|peer| &peer_id == peer.device_id.as_ref().unwrap())
     }
 
+    /// Returns Ok(()), except in the case that an error has occured
     fn has_error(&self) -> Result<(), PeerConnectionError> {
         match self.error.get() {
             Some(Some(e)) => Err(e.clone()),
@@ -396,6 +402,8 @@ impl PeerConnection {
         }
     }
 
+    /// This future completes when the initial messages have been sent, or
+    /// the connection has been closed due to an error.
     pub async fn wait_for_ready(&self) -> Result<(), PeerConnectionError> {
         let (tx, rx) = oneshot::channel();
         let send = self.tx.send(([].to_vec(), Some(tx))).await;
@@ -414,6 +422,7 @@ impl PeerConnection {
         }
     }
 
+    /// Waits for the connection to close. Does not actually ask to close.
     pub async fn wait_for_close(&self) -> Result<(), PeerConnectionError> {
         self.task_tracker.wait().await;
         self.has_error()?;
@@ -439,6 +448,7 @@ impl PeerConnection {
         }
     }
 
+    /// Sends a request to close. Does not wait for the connection to be closed.
     pub async fn close_reason(&self, reason: String) -> tokio::io::Result<()> {
         log::info!("{}: Connection close requested", self.get_name().await);
         let message = items::Close { reason }.encode_for_bep();
@@ -448,6 +458,7 @@ impl PeerConnection {
         Ok(())
     }
 
+    /// Close the connection regularly
     pub async fn close(&self) -> tokio::io::Result<()> {
         self.close_reason("Exit by user".to_string()).await
     }
