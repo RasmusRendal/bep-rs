@@ -1,10 +1,12 @@
+use crate::device_id::DeviceID;
 use crate::peer_connection::PeerConnection;
 use crate::sync_directory::SyncDirectory;
-use crate::DeviceID;
 
 use super::models::*;
 use super::sync_directory;
 use diesel::prelude::*;
+use rand::distr::Alphanumeric;
+use rand::distr::SampleString;
 use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
 use std::fs;
 use std::future::Future;
@@ -434,7 +436,6 @@ impl BepState {
         id: Option<String>,
     ) -> sync_directory::SyncDirectory {
         use crate::schema::sync_folders;
-        use rand::distributions::{Alphanumeric, DistString};
 
         // If both path and id is none, then it's a directory that doesn't exist
         // on our side, and it doesn't exist with a peer either. This makes very
@@ -449,7 +450,7 @@ impl BepState {
 
         let folder_id = id
             .clone()
-            .unwrap_or_else(|| Alphanumeric.sample_string(&mut rand::thread_rng(), 12));
+            .unwrap_or_else(|| Alphanumeric.sample_string(&mut rand::rng(), 12));
 
         let new_dir = SyncFolder {
             id: folder_id.clone(),
@@ -564,5 +565,15 @@ impl BepState {
 
     pub fn add_peer_connection(&mut self, peer_connection: PeerConnection) {
         self.peer_connections.push(peer_connection);
+    }
+
+    pub fn directory_changed(&mut self, dir: &sync_directory::SyncDirectory) {
+        for conn in &self.peer_connections {
+            let cc = conn.clone();
+            let dr = dir.clone();
+            tokio::spawn(async move {
+                cc.directory_updated(&dr).await;
+            });
+        }
     }
 }

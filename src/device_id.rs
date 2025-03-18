@@ -1,6 +1,8 @@
 use data_encoding::BASE32;
 use data_encoding::BASE32_NOPAD;
 
+pub type DeviceID = [u8; 32];
+
 const LUHN32: &[u8] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".as_bytes();
 
 fn codepoint32(c: char) -> usize {
@@ -74,7 +76,7 @@ fn unchunkify(s: &str) -> String {
     s.replace("-", "")
 }
 
-pub fn deviceid_to_bytes(id: &str) -> [u8; 32] {
+pub fn deviceid_from_string(id: &str) -> [u8; 32] {
     BASE32_NOPAD
         .decode(unluhnify(&unchunkify(id)).as_bytes())
         .unwrap()
@@ -82,12 +84,14 @@ pub fn deviceid_to_bytes(id: &str) -> [u8; 32] {
         .unwrap()
 }
 
-pub fn bytes_to_deviceid(bytes: &[u8; 32]) -> String {
+/// Converts a device ID to the Syncthing format
+pub fn deviceid_to_string(bytes: &DeviceID) -> String {
     let l = BASE32.encode(bytes).replace("=", "");
     chunkify(&luhnify(&l))
 }
 
-pub fn bytes_to_base32(bytes: &[u8; 32]) -> String {
+/// Converts a device ID to the base32. Legacy method for older syncthing clients
+pub fn deviceid_to_base32(bytes: &DeviceID) -> String {
     BASE32.encode(bytes).replace("=", "")
 }
 
@@ -101,17 +105,17 @@ mod tests {
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
             25, 26, 27, 28, 29, 30, 31, 32,
         ];
-        let str = bytes_to_deviceid(&id);
-        let byt = deviceid_to_bytes(&str);
+        let str = deviceid_to_string(&id);
+        let byt = deviceid_from_string(&str);
         assert_eq!(byt, id);
 
-        let bytes: [u8; 32] = BASE32_NOPAD
+        let bytes: DeviceID = BASE32_NOPAD
             .decode(b"DOTMVXYJJDOMO4QTANVMLDQX6HEKDOHU4J2MG6UAGRQAJFNIYSNQ")
             .unwrap()
             .try_into()
             .unwrap();
         let deviceid = "DOTMVXY-JJDOMOF-4QTANVM-LDQX6HX-EKDOHU4-J2MG6UC-AGRQAJF-NIYSNQ4";
-        assert_eq!(bytes_to_deviceid(&bytes), deviceid);
-        assert_eq!(bytes, deviceid_to_bytes(deviceid));
+        assert_eq!(deviceid_to_string(&bytes), deviceid);
+        assert_eq!(bytes, deviceid_from_string(deviceid));
     }
 }

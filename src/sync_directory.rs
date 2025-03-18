@@ -60,6 +60,7 @@ impl SyncDirectory {
         let mut sync_files = state.get_sync_files(&self.id).await;
         let mut out_files: Vec<SyncFile> = Vec::new();
         let path = self.path.as_ref().unwrap();
+        let mut changed = false;
         for file in path.read_dir().unwrap().flatten() {
             let mut buf_reader = BufReader::new(File::open(file.path()).unwrap());
             let mut data = Vec::new();
@@ -84,6 +85,7 @@ impl SyncDirectory {
                     }
 
                     if !comp_hashes(&hash, &index_file.hash) {
+                        changed = true;
                         log::info!("We have a new version of the file.");
                         log::info!(
                             "The previous hash was {:x?} while the current hash is {:x?}",
@@ -115,12 +117,17 @@ impl SyncDirectory {
                     state
                         .update_sync_file(self, out_files.last().unwrap())
                         .await;
+                    changed = true;
                 }
             }
         }
 
         for file in &out_files {
             assert!(!file.versions.is_empty());
+        }
+
+        if changed {
+            state.clone().directory_changed(&self).await;
         }
 
         out_files

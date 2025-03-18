@@ -9,19 +9,19 @@ use crate::models::Peer;
 use crate::sync_directory::{SyncDirectory, SyncFile};
 use error::{PeerCommandError, PeerConnectionError};
 use handlers::{drain_requests, handle_connection};
+use rand::distr::StandardUniform;
 use tokio_util::sync::CancellationToken;
 
 use core::time;
 use futures::channel::oneshot::{self, Canceled};
 use items::EncodableItem;
 use log;
-use rand::distributions::Standard;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use ring::digest;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Error, Write};
+use std::io::{self, Write};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::thread;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -127,7 +127,7 @@ impl PeerConnection {
     }
 
     pub async fn send_index(&self) -> io::Result<()> {
-        if let Some(peer) = self.get_peer().await {
+        if let Ok(peer) = self.get_peer().await {
             let directories = self.state.get_sync_directories().await;
             for dir in directories {
                 if !self
@@ -140,7 +140,7 @@ impl PeerConnection {
                 let index = items::Index {
                     folder: dir.id.clone(),
                     files: dir
-                        .generate_index(&self.state)
+                        .get_index(self.state.clone())
                         .await
                         .iter()
                         .map(|x| items::FileInfo {
@@ -201,7 +201,7 @@ impl PeerConnection {
         directory: &SyncDirectory,
         sync_file: &SyncFile,
     ) -> Result<(), PeerCommandError> {
-        let message_id = StdRng::from_entropy().sample(Standard);
+        let message_id = StdRng::from_os_rng().sample(StandardUniform);
 
         if sync_file.blocks.is_empty() {
             return Err(PeerCommandError::Other(
@@ -316,6 +316,7 @@ impl PeerConnection {
                 self.get_file(directory, file).await?;
             }
         }
+        self.state.clone().directory_changed(directory).await;
         log::info!("{}: Syncing complete", self.get_name().await);
         Ok(())
     }
@@ -386,13 +387,26 @@ impl PeerConnection {
     }
 
     /// Get the peer this connection is to
-    pub async fn get_peer(&self) -> Option<Peer> {
+    pub async fn get_peer(&self) -> Result<Peer, PeerCommandError> {
         let peers = self.state.get_peers().await;
-        let peer_id = self.peer_id.as_ref().get().unwrap().clone();
+        let peer_id = self
+            .peer_id
+            .as_ref()
+            .get()
+            .ok_or(PeerCommandError::UninitializedError)?
+            .clone();
         // TODO: Check properly
-        peers
+        let peer = peers
             .into_iter()
-            .find(|peer| &peer_id == peer.device_id.as_ref().unwrap())
+            .find(|peer| &peer_id == peer.device_id.as_ref().unwrap_or(&vec![]));
+        if peer.is_none() {
+            let _ = self.close_reason("Unknown peer".to_string()).await;
+            Err(PeerCommandError::ConnectionError(
+                PeerConnectionError::UnknownPeer,
+            ))
+        } else {
+            Ok(peer.unwrap())
+        }
     }
 
     /// Returns Ok(()), except in the case that an error has occured
@@ -432,9 +446,8 @@ impl PeerConnection {
     }
 
     pub async fn directory_updated(&self, directory: &SyncDirectory) {
-        directory.generate_index(&self.state).await;
         let mut synced_index_updated = false;
-        if let Some(peer) = self.get_peer().await {
+        if let Ok(peer) = self.get_peer().await {
             if let Some(directory) = self.state.get_sync_directory(&directory.id.clone()).await {
                 if self
                     .state
@@ -465,14 +478,14 @@ impl PeerConnection {
         self.close_reason("Exit by user".to_string()).await
     }
 
-    pub async fn close_err(&self, err: &Error) -> tokio::io::Result<()> {
+    pub async fn close_err(&self, err: &PeerConnectionError) -> tokio::io::Result<()> {
         match err {
             _ => self.close_reason("Unknown error".to_string()),
         }
         .await
     }
 
-    pub async fn get_peer_name(&self) -> Option<String> {
+    pub async fn get_peer_name(&self) -> Result<String, PeerCommandError> {
         self.get_peer().await.map(|x| x.name)
     }
 

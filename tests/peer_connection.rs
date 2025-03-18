@@ -419,8 +419,11 @@ async fn test_update_file() -> io::Result<()> {
     test_struct.write_hello_file(FILE_CONTENTS2);
 
     log::info!("Generating second index");
-    connection2
-        .directory_updated(test_struct.peer1dir.as_ref().unwrap())
+    test_struct
+        .peer2dir
+        .clone()
+        .unwrap()
+        .generate_index(&test_struct.state2)
         .await;
 
     // And then we request the file we just overwrote

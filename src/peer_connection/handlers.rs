@@ -9,7 +9,7 @@ use log;
 use prost::Message;
 use ring::digest;
 use std::fs::File;
-use std::io::{self, BufReader, Read};
+use std::io::{BufReader, Read};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
@@ -19,11 +19,10 @@ use tokio::time::error::Elapsed;
 use tokio_util::sync::CancellationToken;
 
 /// Call this function when the client has indicated it want to send a Request
-/// At the moment, it always responds with a hardcoded file
 async fn handle_request(
     request: items::Request,
     peer_connection: PeerConnection,
-) -> tokio::io::Result<()> {
+) -> Result<(), PeerConnectionError> {
     log::info!(
         "{}: Received request {:?}",
         peer_connection.get_name().await,
@@ -125,7 +124,7 @@ async fn handle_request(
 async fn handle_response(
     response: items::Response,
     peer_connection: PeerConnection,
-) -> tokio::io::Result<()> {
+) -> Result<(), PeerConnectionError> {
     log::info!(
         "{}: Received response for request {}",
         peer_connection.get_name().await,
@@ -144,7 +143,9 @@ async fn handle_response(
         assert!(r.is_ok());
         Ok(())
     } else {
-        Err(io::Error::other("Received unsolicited response"))
+        Err(PeerConnectionError::Other(
+            "Received unsolicited response".to_string(),
+        ))
     }
 }
 
@@ -152,7 +153,7 @@ async fn handle_index(
     folder_id: String,
     files: Vec<items::FileInfo>,
     peer_connection: PeerConnection,
-) -> tokio::io::Result<()> {
+) -> Result<(), PeerConnectionError> {
     log::info!("{}: Handling index", peer_connection.get_name().await);
     let syncdir = peer_connection
         .state
@@ -253,8 +254,8 @@ async fn handle_index(
 async fn handle_reading(
     stream: &mut ReadHalf<impl AsyncRead + Send>,
     peer_connection: PeerConnection,
-) -> tokio::io::Result<()> {
-    let hello = items::receive_hello(stream).await.unwrap();
+) -> Result<(), PeerConnectionError> {
+    let hello = items::receive_hello(stream).await?;
     log::info!(
         "{}: Hello contents: {:?}",
         peer_connection.get_name().await,
@@ -295,10 +296,9 @@ async fn handle_reading(
             Some(items::MessageCompression::None) => false,
             Some(items::MessageCompression::Lz4) => true,
             None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Unknown encryption type",
-                ))
+                return Err(PeerConnectionError::Other(
+                    "Unknown encryption type".to_string(),
+                ));
             }
         };
         if header.r#type == items::MessageType::Request as i32 {
@@ -382,9 +382,8 @@ async fn handle_reading(
                 peer_connection.get_name().await,
                 header.r#type
             );
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Unknown message type",
+            return Err(PeerConnectionError::Other(
+                "Unknown message type".to_string(),
             ));
         }
     }

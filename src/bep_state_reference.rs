@@ -1,9 +1,9 @@
 use crate::{
     bep_state::{BepState, NewFolderHandler},
+    device_id::DeviceID,
     models::Peer,
     peer_connection::PeerConnection,
     sync_directory::{self, SyncDirectory},
-    DeviceID,
 };
 use ring::signature::EcdsaKeyPair;
 use std::{path::PathBuf, sync::Arc};
@@ -164,5 +164,9 @@ impl BepStateRef {
 
     pub async fn add_peer_connection(&mut self, peer_connection: PeerConnection) {
         self.state.lock().await.add_peer_connection(peer_connection);
+    }
+
+    pub async fn directory_changed(&mut self, dir: &sync_directory::SyncDirectory) {
+        self.state.lock().await.directory_changed(dir)
     }
 }

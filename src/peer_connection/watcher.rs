@@ -27,6 +27,7 @@ fn async_watcher() -> notify::Result<(RecommendedWatcher, Receiver<notify::Resul
 // TODO: This is probably the wrong abstraction level.
 // We end up with a watcher for each connection
 pub async fn watch(peer_connection: PeerConnection) -> Result<(), notify::Error> {
+    peer_connection.wait_for_ready().await.unwrap();
     let peer = peer_connection.get_peer().await.unwrap();
     let (mut watcher, mut rx) = async_watcher()?;
 
@@ -52,12 +53,8 @@ pub async fn watch(peer_connection: PeerConnection) -> Result<(), notify::Error>
         match cancellation_token.run_until_cancelled(rx.next()).await {
             Some(Some(Ok(e))) => {
                 if e.kind.is_create() || e.kind.is_modify() || e.kind.is_remove() {
-                    if let Err(e) = peer_connection.send_index().await {
-                        log::error!(
-                            "{}: Error when trying to send an updated index: {}",
-                            peer_connection.get_name().await,
-                            e
-                        );
+                    for dir in peer_connection.state.get_sync_directories().await {
+                        dir.generate_index(&peer_connection.state).await;
                     }
                 }
             }

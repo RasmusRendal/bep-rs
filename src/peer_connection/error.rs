@@ -3,6 +3,7 @@ use std::io;
 use thiserror::Error;
 use tokio::time::error::Elapsed;
 
+/// Fatal connection errors
 #[derive(Error, Debug, Clone)]
 pub enum PeerConnectionError {
     #[error("Unknown Peer")]
@@ -35,6 +36,7 @@ impl From<prost::DecodeError> for PeerConnectionError {
     }
 }
 
+/// An error that may occur while asking something from a PeerConnection
 #[derive(Error, Debug)]
 pub enum PeerCommandError {
     #[error("Connection closed unexpectedly.")]
@@ -47,6 +49,8 @@ pub enum PeerCommandError {
     ConnectionError(PeerConnectionError),
     #[error("I/O Error: {0}")]
     IOError(io::Error),
+    #[error("Connection not yet initialized")]
+    UninitializedError,
     #[error("Unknown error type: {0}")]
     Other(String),
 }
