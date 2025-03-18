@@ -5,3 +5,4 @@ DROP TABLE folder_shares;
 DROP TABLE peer_addresses;
 DROP TABLE sync_files;
 DROP TABLE sync_file_versions;
+DROP TABLE sync_file_blocks;

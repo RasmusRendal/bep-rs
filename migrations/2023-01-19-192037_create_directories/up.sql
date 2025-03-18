@@ -8,7 +8,7 @@ CREATE TABLE device_options (
 CREATE TABLE sync_folders (
   id TEXT PRIMARY KEY,
   label TEXT NOT NULL,
-  dir_path TEXT UNIQUE NOT NULL
+  dir_path TEXT UNIQUE
 );
 
 CREATE TABLE peers (
