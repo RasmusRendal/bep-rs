@@ -210,7 +210,7 @@ mod tests {
             o.write_all(file_contents.as_bytes()).unwrap();
         }
 
-        let directory = state.add_sync_directory(path.clone(), None);
+        let directory = state.add_sync_directory(Some(path.clone()), "testdir".to_string(), None);
 
         let mut index = directory
             .generate_index(&BepStateRef::from_bepstate(state))
@@ -266,7 +266,9 @@ mod tests {
             o.write_all(file_contents1.as_bytes()).unwrap();
         }
 
-        let directory = state.add_sync_directory(path.clone(), None).await;
+        let directory = state
+            .add_sync_directory(Some(path.clone()), "testdir".to_string(), None)
+            .await;
 
         // Generate the first index
         let mut index = directory.generate_index(&state).await;

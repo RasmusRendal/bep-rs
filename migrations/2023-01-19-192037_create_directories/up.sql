@@ -6,7 +6,7 @@ CREATE TABLE device_options (
 );
 
 CREATE TABLE sync_folders (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   label TEXT NOT NULL,
   dir_path TEXT UNIQUE
 );

@@ -149,16 +149,16 @@ async fn handle_response(
 }
 
 async fn handle_index(
-    folder: String,
+    folder_id: String,
     files: Vec<items::FileInfo>,
     peer_connection: PeerConnection,
 ) -> tokio::io::Result<()> {
     log::info!("{}: Handling index", peer_connection.get_name().await);
-    let syncdir = peer_connection.state.get_sync_directory(&folder).await;
-    if syncdir.is_none() {
-        return Ok(());
-    }
-    let syncdir = syncdir.unwrap();
+    let syncdir = peer_connection
+        .state
+        .get_sync_directory(&folder_id)
+        .await
+        .unwrap();
     let mut localindex = syncdir.get_index(peer_connection.state.clone()).await;
     for file in files {
         log::info!(
@@ -358,20 +358,23 @@ async fn handle_reading(
             let cluster_config =
                 items::receive_message::<items::ClusterConfig>(stream, compression).await?;
             for folder in cluster_config.folders {
-                peer_connection
+                if peer_connection
                     .state
-                    .new_folder(
-                        folder.label,
-                        peer_connection
-                            .get_peer()
-                            .await
-                            .unwrap()
-                            .device_id
-                            .unwrap()
-                            .try_into()
-                            .unwrap(),
-                    )
-                    .await;
+                    .get_sync_directory(&folder.id)
+                    .await
+                    .is_none()
+                {
+                    let sd = peer_connection
+                        .state
+                        .add_sync_directory(None, folder.label.clone(), Some(folder.id))
+                        .await;
+                    let peer = peer_connection.get_peer().await.unwrap();
+                    peer_connection
+                        .state
+                        .sync_directory_with_peer(&sd, &peer)
+                        .await;
+                    peer_connection.state.new_folder(sd).await;
+                }
             }
         } else {
             log::error!(

@@ -4,7 +4,6 @@ use bep_rs::peer_connection::*;
 use bep_rs::sync_directory::SyncBlock;
 use bep_rs::sync_directory::SyncDirectory;
 use bep_rs::sync_directory::SyncFile;
-use bep_rs::DeviceID;
 use error::PeerCommandError;
 use error::PeerConnectionError;
 use std::fs;
@@ -103,13 +102,14 @@ impl TestStruct {
     pub async fn add_sync_dirs(&mut self) {
         self.peer1dir = Some(
             self.state1
-                .add_sync_directory(self.peer1dirpath.clone(), None)
+                .add_sync_directory(Some(self.peer1dirpath.clone()), "testdir".to_string(), None)
                 .await,
         );
         self.peer2dir = Some(
             self.state2
                 .add_sync_directory(
-                    self.peer2dirpath.clone(),
+                    Some(self.peer2dirpath.clone()),
+                    "testdir".to_string(),
                     Some(self.peer1dir.as_ref().unwrap().id.clone()),
                 )
                 .await,
@@ -507,7 +507,7 @@ async fn test_track_dir() -> io::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_accept_dir_with_handler() -> io::Result<()> {
     // Instead of requesting testfile, we should request an entire directory, and the testfile
     // should be in there
@@ -518,46 +518,46 @@ async fn test_accept_dir_with_handler() -> io::Result<()> {
     test_struct.write_hello_file(FILE_CONTENTS);
     test_struct.peer().await;
 
-    test_struct.peer1dir = Some(
+    test_struct.peer2dir = Some(
         test_struct
-            .state1
-            .add_sync_directory(test_struct.peer1dirpath.clone(), None)
+            .state2
+            .add_sync_directory(
+                Some(test_struct.peer2dirpath.clone()),
+                "testdir".to_string(),
+                None,
+            )
             .await,
     );
     test_struct
-        .state1
+        .state2
         .sync_directory_with_peer(
-            test_struct.peer1dir.as_ref().unwrap(),
-            test_struct.peer2.as_ref().unwrap(),
+            test_struct.peer2dir.as_ref().unwrap(),
+            test_struct.peer1.as_ref().unwrap(),
         )
         .await;
 
-    let state2c = test_struct.state2.clone();
-    let dev1id = test_struct.state1.get_id().await.clone();
-    let newsyncdir = test_struct.peer2dirpath.clone();
+    let state1c = test_struct.state1.clone();
+    let newsyncdir = test_struct.peer1dirpath.clone();
     test_struct
-        .state2
-        .set_new_folder_handler(Some(Arc::new(
-            move |(id, device_id): (String, DeviceID)| {
-                let dev1id = dev1id.clone();
-                let state2c = state2c.clone();
-                let newsyncdir = newsyncdir.clone();
-                Box::pin(async move {
-                    log::info!("New folder share request {}", id);
-                    if device_id == dev1id {
-                        log::info!("And it matches");
-                        let sd = state2c.add_sync_directory(newsyncdir, Some(id)).await;
-                        state2c
-                            .sync_directory_with_peer(&sd, &state2c.get_peer_by_id(device_id).await)
-                            .await;
-                    }
-                })
-            },
-        )))
+        .state1
+        .set_new_folder_handler(Some(Arc::new(move |dir: SyncDirectory| {
+            let mut state1c = state1c.clone();
+            let newsyncdir = newsyncdir.clone();
+            Box::pin(async move {
+                log::info!("New folder share request {}", dir.label);
+                // TODO: Horrible hack
+                thread::sleep(time::Duration::from_millis(100));
+                log::info!("We are asking the state to sync it");
+                state1c
+                    .set_sync_directory_path(&dir, Some(newsyncdir))
+                    .await;
+                log::info!("We asked the state to sync it");
+            })
+        })))
         .await;
 
     test_struct
-        .peer1dir
+        .peer2dir
         .as_ref()
         .unwrap()
         .generate_index(&test_struct.state1)
@@ -566,10 +566,6 @@ async fn test_accept_dir_with_handler() -> io::Result<()> {
     let (connection1, connection2) = test_struct.connect().await.unwrap();
 
     thread::sleep(time::Duration::from_millis(400));
-    connection1
-        .get_directory(test_struct.peer1dir.as_ref().unwrap())
-        .await
-        .unwrap();
 
     let mut dstfile = test_struct.peer1dirpath.clone();
     dstfile.push("testfile");

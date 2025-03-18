@@ -1,3 +1,5 @@
+use crate::peer_connection::PeerConnection;
+use crate::sync_directory::SyncDirectory;
 use crate::DeviceID;
 
 use super::models::*;
@@ -16,7 +18,7 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations/");
 pub type BepEventHandler<Args> =
     Option<Arc<dyn Fn(Args) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>>;
 
-pub type NewFolderHandler = BepEventHandler<(String, DeviceID)>;
+pub type NewFolderHandler = BepEventHandler<SyncDirectory>;
 
 /// This structure maintains the state of a bep
 /// client
@@ -24,6 +26,9 @@ pub struct BepState {
     pub data_directory: PathBuf,
     connection: SqliteConnection,
     new_folder_handler: NewFolderHandler,
+    /// A series of peer connections, which are informed about changes to the state.
+    /// TODO: Remove them when they die
+    peer_connections: Vec<PeerConnection>,
 }
 
 fn from_i64(i: i64) -> u64 {
@@ -36,7 +41,7 @@ fn from_u64(i: u64) -> i64 {
 
 fn model_to_sync_dir(folder: SyncFolder) -> sync_directory::SyncDirectory {
     sync_directory::SyncDirectory {
-        id: folder.id.clone().unwrap(),
+        id: folder.id.clone(),
         label: folder.label.clone(),
         path: folder.dir_path.as_ref().map(PathBuf::from),
     }
@@ -69,6 +74,7 @@ impl BepState {
             data_directory,
             connection,
             new_folder_handler: None,
+            peer_connections: vec![],
         };
         if !s.is_initialized() {
             use crate::schema::device_options;
@@ -134,7 +140,7 @@ impl BepState {
             .unwrap_or_default()
             .iter()
             .map(|x| sync_directory::SyncDirectory {
-                id: x.id.clone().unwrap(),
+                id: x.id.clone(),
                 label: x.label.clone(),
                 path: x.dir_path.as_ref().map(PathBuf::from),
             })
@@ -142,11 +148,40 @@ impl BepState {
     }
 
     /// Get a specific sync directory
-    pub fn get_sync_directory(&mut self, id: &String) -> Option<sync_directory::SyncDirectory> {
+    pub fn get_sync_directory(
+        &mut self,
+        folder_id: &String,
+    ) -> Option<sync_directory::SyncDirectory> {
         // TODO: Handle this better
         self.get_sync_directories()
             .into_iter()
-            .find(|dir| dir.id == *id)
+            .find(|dir| dir.id == *folder_id)
+    }
+
+    pub fn set_sync_directory_path(
+        &mut self,
+        dir: &sync_directory::SyncDirectory,
+        path: Option<PathBuf>,
+    ) {
+        use super::schema::sync_folders::dsl::*;
+
+        let path_string: Option<String> =
+            path.clone().and_then(|p| p.to_str().map(|s| s.to_owned()));
+
+        diesel::update(sync_folders.filter(id.eq(dir.id.clone())))
+            .set(dir_path.eq(path_string))
+            .execute(&mut self.connection)
+            .unwrap();
+        if path.is_some() {
+            for conn in &self.peer_connections {
+                let cc = conn.clone();
+                let mut dr = dir.clone();
+                dr.path = path.clone();
+                tokio::spawn(async move {
+                    cc.get_directory(&dr).await.unwrap();
+                });
+            }
+        }
     }
 
     fn get_versions(&mut self, id: i32) -> Vec<(u64, u64)> {
@@ -389,25 +424,37 @@ impl BepState {
             .expect("Error deleting folder");
     }
 
+    /// Adds a sync directory to the database. If ID is unset, one is generated.
+    /// If path is unset, this implies that it belongs to a peer, but we haven't
+    /// accepted it yet.
     pub fn add_sync_directory(
         &mut self,
-        path: PathBuf,
+        path: Option<PathBuf>,
+        label: String,
         id: Option<String>,
     ) -> sync_directory::SyncDirectory {
         use crate::schema::sync_folders;
         use rand::distributions::{Alphanumeric, DistString};
 
-        if !path.exists() {
-            panic!("Folder {} not found", path.display());
+        // If both path and id is none, then it's a directory that doesn't exist
+        // on our side, and it doesn't exist with a peer either. This makes very
+        // little sense.
+        assert!(path.is_some() || id.is_some());
+
+        if let Some(p) = &path {
+            if !p.exists() {
+                panic!("Folder {} not found", p.display());
+            }
         }
 
-        let folder_id =
-            id.unwrap_or_else(|| Alphanumeric.sample_string(&mut rand::thread_rng(), 12));
+        let folder_id = id
+            .clone()
+            .unwrap_or_else(|| Alphanumeric.sample_string(&mut rand::thread_rng(), 12));
 
         let new_dir = SyncFolder {
-            id: Some(folder_id.clone()),
-            label: path.file_name().unwrap().to_owned().into_string().unwrap(),
-            dir_path: Some(path.display().to_string()),
+            id: folder_id.clone(),
+            label,
+            dir_path: path.and_then(|p| p.to_str().map(|s| s.to_owned())),
         };
 
         diesel::insert_into(sync_folders::table)
@@ -500,16 +547,22 @@ impl BepState {
             .unwrap_or(false)
     }
 
-    pub fn new_folder(&self, name: String, device: DeviceID) {
+    /// Called when a connection received an as to yet unknown folder
+    /// from a peer.
+    pub fn new_folder(&mut self, directory: sync_directory::SyncDirectory) {
         if let Some(handler) = &self.new_folder_handler {
             let h = handler.clone();
             tokio::spawn(async move {
-                h((name, device)).await;
+                h(directory).await;
             });
         }
     }
 
     pub fn set_new_folder_handler(&mut self, handler: NewFolderHandler) {
         self.new_folder_handler = handler;
+    }
+
+    pub fn add_peer_connection(&mut self, peer_connection: PeerConnection) {
+        self.peer_connections.push(peer_connection);
     }
 }

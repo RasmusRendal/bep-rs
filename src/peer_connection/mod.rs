@@ -95,7 +95,9 @@ impl PeerConnection {
             task_tracker: TaskTracker::new(),
         };
         let peer_connectionc = peer_connection.clone();
+        let mut sc = state.clone();
         tokio::spawn(async move {
+            sc.add_peer_connection(peer_connection.clone()).await;
             if let Err(e) = handle_connection(
                 socket,
                 peer_connection.clone(),

@@ -1,7 +1,9 @@
 use crate::{
     bep_state::{BepState, NewFolderHandler},
     models::Peer,
-    sync_directory, DeviceID,
+    peer_connection::PeerConnection,
+    sync_directory::{self, SyncDirectory},
+    DeviceID,
 };
 use ring::signature::EcdsaKeyPair;
 use std::{path::PathBuf, sync::Arc};
@@ -13,6 +15,7 @@ pub struct BepStateRef {
 }
 
 // TODO: This whole thing could probably be a procedural macro
+// This might also let us carry over documentation.
 impl BepStateRef {
     pub fn from_bepstate(state: BepState) -> Self {
         BepStateRef {
@@ -37,6 +40,14 @@ impl BepStateRef {
 
     pub async fn get_sync_directories(&self) -> Vec<sync_directory::SyncDirectory> {
         self.state.lock().await.get_sync_directories()
+    }
+
+    pub async fn set_sync_directory_path(
+        &mut self,
+        dir: &sync_directory::SyncDirectory,
+        path: Option<PathBuf>,
+    ) {
+        self.state.lock().await.set_sync_directory_path(dir, path);
     }
 
     pub async fn get_sync_directory(&self, id: &String) -> Option<sync_directory::SyncDirectory> {
@@ -109,10 +120,11 @@ impl BepStateRef {
 
     pub async fn add_sync_directory(
         &self,
-        path: PathBuf,
+        path: Option<PathBuf>,
+        label: String,
         id: Option<String>,
     ) -> sync_directory::SyncDirectory {
-        self.state.lock().await.add_sync_directory(path, id)
+        self.state.lock().await.add_sync_directory(path, label, id)
     }
 
     pub async fn get_peer(&self, peer_name: String) -> Peer {
@@ -142,11 +154,15 @@ impl BepStateRef {
         self.state.lock().await.is_directory_synced(directory, peer)
     }
 
-    pub async fn new_folder(&self, name: String, device: DeviceID) {
-        self.state.lock().await.new_folder(name, device)
+    pub async fn new_folder(&self, directory: SyncDirectory) {
+        self.state.lock().await.new_folder(directory)
     }
 
     pub async fn set_new_folder_handler(&mut self, handler: NewFolderHandler) {
         self.state.lock().await.set_new_folder_handler(handler)
+    }
+
+    pub async fn add_peer_connection(&mut self, peer_connection: PeerConnection) {
+        self.state.lock().await.add_peer_connection(peer_connection);
     }
 }
