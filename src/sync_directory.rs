@@ -127,7 +127,7 @@ impl SyncDirectory {
         }
 
         if changed {
-            state.clone().directory_changed(&self).await;
+            state.clone().directory_changed(self).await;
         }
 
         out_files

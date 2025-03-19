@@ -350,7 +350,7 @@ impl PeerConnection {
         id: i32,
         response_type: PeerRequestResponseType,
         msg: Vec<u8>,
-    ) -> io::Result<PeerRequestResponse> {
+    ) -> Result<PeerRequestResponse, PeerCommandError> {
         assert!(response_type != PeerRequestResponseType::None);
         let (tx, rx) = oneshot::channel();
 
@@ -376,16 +376,7 @@ impl PeerConnection {
         }
         match rx.await {
             Ok(r) => Ok(r),
-            Err(e) => {
-                log::error!(
-                    "{}: Got error while closing connection {}",
-                    self.get_name().await,
-                    e
-                );
-                Err(io::Error::other(
-                    "Got an error while trying to close connection",
-                ))
-            }
+            Err(Canceled) => Err(PeerCommandError::ConnectionClosed),
         }
     }
 
@@ -475,7 +466,7 @@ impl PeerConnection {
     }
 
     /// Sends a request to close. Does not wait for the connection to be closed.
-    pub async fn close_reason(&self, reason: String) -> tokio::io::Result<()> {
+    pub async fn close_reason(&self, reason: String) -> Result<(), PeerCommandError> {
         log::info!("{}: Connection close requested", self.get_name().await);
         let message = items::Close { reason }.encode_for_bep();
         self.submit_request(-1, PeerRequestResponseType::WhenSent, message)
@@ -485,11 +476,15 @@ impl PeerConnection {
     }
 
     /// Close the connection regularly
-    pub async fn close(&self) -> tokio::io::Result<()> {
-        self.close_reason("Exit by user".to_string()).await
+    pub async fn close(&self) -> Result<(), PeerCommandError> {
+        match self.close_reason("Exit by user".to_string()).await {
+            Ok(()) => Ok(()),
+            Err(PeerCommandError::ConnectionClosed) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
-    pub async fn close_err(&self, err: &PeerConnectionError) -> tokio::io::Result<()> {
+    pub async fn close_err(&self, err: &PeerConnectionError) -> Result<(), PeerCommandError> {
         match err {
             _ => self.close_reason("Unknown error".to_string()),
         }

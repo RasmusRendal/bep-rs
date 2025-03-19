@@ -161,6 +161,7 @@ async fn handle_index(
         .await
         .unwrap();
     let mut localindex = syncdir.get_index(peer_connection.state.clone()).await;
+    let mut changed = false;
     for file in files {
         log::info!(
             "{}: Handling index file {}",
@@ -200,6 +201,7 @@ async fn handle_index(
                 .state
                 .update_sync_file(&syncdir, localfile)
                 .await;
+            changed = true;
         } else {
             log::info!(
                 "{}: New file {}",
@@ -234,18 +236,21 @@ async fn handle_index(
                 .state
                 .update_sync_file(&syncdir, &syncfile)
                 .await;
+            changed = true;
         }
     }
     log::info!("{}: Index merged", peer_connection.get_name().await);
-    tokio::spawn(async move {
-        if let Err(e) = peer_connection.get_directory(&syncdir).await {
-            log::error!(
-                "{}: Got error syncing directory {}",
-                peer_connection.get_name().await,
-                e
-            );
-        }
-    });
+    if changed {
+        tokio::spawn(async move {
+            if let Err(e) = peer_connection.get_directory(&syncdir).await {
+                log::error!(
+                    "{}: Got error syncing directory {}",
+                    peer_connection.get_name().await,
+                    e
+                );
+            }
+        });
+    }
 
     Ok(())
 }
@@ -397,14 +402,13 @@ async fn handle_reading(
 async fn close_receiver(
     rx: &mut Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
 ) {
-    // Empty the message queue
+    rx.close();
     while let Some((_msg, txo)) = rx.recv().await {
         if let Some(tx) = txo {
             // If we get an error, it's because the place we're reporting errors to has disappeared
             let _ = tx.send(PeerRequestResponse::Closed);
         }
     }
-    rx.close();
 }
 
 async fn generate_cluster_config(peer_connection: &mut PeerConnection) -> items::ClusterConfig {
@@ -595,7 +599,9 @@ pub async fn handle_connection(
         let r = handle_reading(&mut rd, peer_connectionclone.clone()).await;
         if let Err(e) = &r {
             log::error!("{}: Got error from reader: {}", name, e);
-            peer_connectionclone.close_err(e).await?;
+            if let Err(e2) = peer_connectionclone.close_err(e).await {
+                log::error!("{}: Got an error setting the close error: {}", name, e2);
+            };
         }
         cancellation_token_clone.cancel();
         r

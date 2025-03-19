@@ -5,10 +5,7 @@ use futures::{
 use notify::{self, RecursiveMode, Watcher};
 use notify::{Config, Event, RecommendedWatcher};
 
-use super::{
-    error::{PeerCommandError, PeerConnectionError},
-    PeerConnection,
-};
+use super::{error::PeerCommandError, PeerConnection};
 
 fn async_watcher() -> notify::Result<(RecommendedWatcher, Receiver<notify::Result<Event>>)> {
     let (mut tx, rx) = channel(1);

@@ -400,7 +400,7 @@ async fn test_update_file() -> io::Result<()> {
         .await
         .unwrap();
 
-    // Now we requets the file from the peer
+    // Now we request the file from the peer
 
     let mut dstfile = test_struct.peer1dirpath.clone();
     dstfile.push("testfile");
@@ -611,7 +611,7 @@ async fn test_decentralized_sync() -> io::Result<()> {
     let s1_p2 = state1
         .add_peer("state2".to_string(), state2.get_id().await)
         .await;
-    let s1_p3 = state1
+    let _ = state1
         .add_peer("state3".to_string(), state3.get_id().await)
         .await;
 

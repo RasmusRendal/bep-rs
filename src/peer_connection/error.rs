@@ -66,3 +66,9 @@ impl From<PeerConnectionError> for PeerCommandError {
         PeerCommandError::ConnectionError(err)
     }
 }
+
+impl From<PeerCommandError> for std::io::Error {
+    fn from(value: PeerCommandError) -> Self {
+        io::Error::other(format!("Error: {}", value))
+    }
+}
