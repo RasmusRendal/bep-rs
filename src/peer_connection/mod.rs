@@ -137,13 +137,13 @@ impl PeerConnection {
                 {
                     continue;
                 }
-                let index = items::Index {
-                    folder: dir.id.clone(),
-                    files: dir
-                        .get_index(self.state.clone())
-                        .await
-                        .iter()
-                        .map(|x| items::FileInfo {
+
+                let files = dir
+                    .get_index(self.state.clone())
+                    .await
+                    .iter()
+                    .map(|x| -> Result<items::FileInfo, std::io::Error> {
+                        Ok(items::FileInfo {
                             name: x.get_name(),
                             r#type: items::FileInfoType::File as i32,
                             size: x.get_size() as i64,
@@ -167,7 +167,7 @@ impl PeerConnection {
                             sequence: 1,
                             block_size: x.get_size() as i32,
                             blocks: x
-                                .gen_blocks(&dir)
+                                .gen_blocks(&dir)?
                                 .iter()
                                 .map(|y| items::BlockInfo {
                                     offset: 0,
@@ -185,7 +185,12 @@ impl PeerConnection {
                             inode_change_ns: 0,
                             encryption_trailer_size: 0,
                         })
-                        .collect(),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let index = items::Index {
+                    folder: dir.id.clone(),
+                    files,
                     last_sequence: 0,
                 };
                 log::info!("{}: Sending index: {:?}", self.get_name().await, index);
@@ -309,7 +314,9 @@ impl PeerConnection {
         let index = directory.get_index(self.state.clone()).await;
 
         for file in &index {
-            let mut path = directory.path.as_ref().unwrap().clone();
+            let mut path = directory.path.clone().ok_or(PeerCommandError::Other(
+                "Requested get of non-synced directory".to_string(),
+            ))?;
             path.push(&file.path);
             if !path.exists() || file.synced_version < file.get_index_version() {
                 log::info!("{}: we want a file {:?}", self.get_name().await, file.path);

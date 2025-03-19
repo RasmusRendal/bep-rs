@@ -1,7 +1,7 @@
 use super::bep_state_reference::BepStateRef;
 use ring::digest;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{self, BufReader, Read};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -140,11 +140,15 @@ impl SyncDirectory {
 
 impl SyncFile {
     /// For a file on disk, generate a set of SyncBlocks
-    pub fn gen_blocks(&self, dir: &SyncDirectory) -> Vec<SyncBlock> {
-        let mut path = dir.path.as_ref().unwrap().clone();
+    pub fn gen_blocks(&self, dir: &SyncDirectory) -> Result<Vec<SyncBlock>, io::Error> {
+        let mut path = dir
+            .path
+            .as_ref()
+            .ok_or(io::Error::other("Non-synced directory"))?
+            .clone();
         path.push(&self.path);
-        let h = File::open(path).unwrap();
-        let len = h.metadata().unwrap().len() as u32;
+        let h = File::open(path)?;
+        let len = h.metadata()?.len() as u32;
         // Here we may use only one block.
         // TODO: Support more blocks
         assert!(len < 1024 * 1024 * 16);
@@ -153,7 +157,7 @@ impl SyncFile {
             size: len as i32,
             hash: self.hash.clone(),
         };
-        vec![block]
+        Ok(vec![block])
     }
 
     pub fn get_index_version(&self) -> u64 {

@@ -583,3 +583,106 @@ async fn test_accept_dir_with_handler() -> io::Result<()> {
     connection2.close().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_decentralized_sync() -> io::Result<()> {
+    // Given three BEP states, A, B, C, all three sharing a directory, but
+    // with A and C not being connected directly, C should still get a file
+    // from A
+
+    let test_dir = PathBuf::from(tempfile::tempdir().unwrap().path());
+    fs::create_dir(test_dir.clone()).unwrap();
+    let statedir1 = test_dir.clone().join("statedir1");
+    let statedir2 = test_dir.clone().join("statedir2");
+    let statedir3 = test_dir.clone().join("statedir3");
+
+    let state1 = BepStateRef::new(statedir1);
+    let state2 = BepStateRef::new(statedir2);
+    let state3 = BepStateRef::new(statedir3);
+
+    let syncdir1 = test_dir.clone().join("syncdir1");
+    let syncdir2 = test_dir.clone().join("syncdir2");
+    let syncdir3 = test_dir.clone().join("syncdir3");
+
+    fs::create_dir(&syncdir1).unwrap();
+    fs::create_dir(&syncdir2).unwrap();
+    fs::create_dir(&syncdir3).unwrap();
+
+    let s1_p2 = state1
+        .add_peer("state2".to_string(), state2.get_id().await)
+        .await;
+    let s1_p3 = state1
+        .add_peer("state3".to_string(), state3.get_id().await)
+        .await;
+
+    let s2_p1 = state2
+        .add_peer("state1".to_string(), state1.get_id().await)
+        .await;
+    let s2_p3 = state2
+        .add_peer("state3".to_string(), state3.get_id().await)
+        .await;
+
+    let s3_p1 = state3
+        .add_peer("state1".to_string(), state1.get_id().await)
+        .await;
+    let s3_p2 = state3
+        .add_peer("state2".to_string(), state2.get_id().await)
+        .await;
+
+    let sd1 = state1
+        .add_sync_directory(Some(syncdir1.clone()), "syncdir1".to_string(), None)
+        .await;
+    let sd2 = state2
+        .add_sync_directory(
+            Some(syncdir2.clone()),
+            "syncdir2".to_string(),
+            Some(sd1.id.clone()),
+        )
+        .await;
+    let sd3 = state3
+        .add_sync_directory(
+            Some(syncdir3.clone()),
+            "syncdir3".to_string(),
+            Some(sd1.id.clone()),
+        )
+        .await;
+
+    state1.sync_directory_with_peer(&sd1, &s1_p2).await;
+    state1.sync_directory_with_peer(&sd1, &s1_p2).await;
+
+    state2.sync_directory_with_peer(&sd2, &s2_p1).await;
+    state2.sync_directory_with_peer(&sd2, &s2_p3).await;
+
+    state3.sync_directory_with_peer(&sd3, &s3_p1).await;
+    state3.sync_directory_with_peer(&sd3, &s3_p2).await;
+
+    let (client, server) = tokio::io::duplex(64);
+    let conn1 = PeerConnection::new(client, state1.clone(), false);
+    let conn2 = PeerConnection::new(server, state2.clone(), true);
+
+    let (client, server) = tokio::io::duplex(64);
+    let conn3 = PeerConnection::new(client, state2.clone(), false);
+    let conn4 = PeerConnection::new(server, state3.clone(), true);
+
+    {
+        let mut helloworld = File::create(syncdir1.clone().join(FILE_NAME)).unwrap();
+        helloworld.write_all(FILE_CONTENTS.as_bytes()).unwrap();
+    }
+
+    sd1.generate_index(&state1).await;
+    thread::sleep(time::Duration::from_millis(400));
+
+    let dstfile = File::open(syncdir3.clone().join(FILE_NAME));
+    assert!(dstfile.is_ok());
+    let dstfile = dstfile.unwrap();
+    let mut contents = String::new();
+    let mut buf_reader = BufReader::new(dstfile);
+    buf_reader.read_to_string(&mut contents).unwrap();
+    assert_eq!(contents, FILE_CONTENTS);
+    conn1.close().await?;
+    conn2.close().await?;
+    conn3.close().await?;
+    conn4.close().await?;
+
+    Ok(())
+}
