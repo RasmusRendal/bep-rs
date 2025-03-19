@@ -5,7 +5,10 @@ use futures::{
 use notify::{self, RecursiveMode, Watcher};
 use notify::{Config, Event, RecommendedWatcher};
 
-use super::PeerConnection;
+use super::{
+    error::{PeerCommandError, PeerConnectionError},
+    PeerConnection,
+};
 
 fn async_watcher() -> notify::Result<(RecommendedWatcher, Receiver<notify::Result<Event>>)> {
     let (mut tx, rx) = channel(1);
@@ -26,10 +29,10 @@ fn async_watcher() -> notify::Result<(RecommendedWatcher, Receiver<notify::Resul
 
 // TODO: This is probably the wrong abstraction level.
 // We end up with a watcher for each connection
-pub async fn watch(peer_connection: PeerConnection) -> Result<(), notify::Error> {
-    peer_connection.wait_for_ready().await.unwrap();
-    let peer = peer_connection.get_peer().await.unwrap();
-    let (mut watcher, mut rx) = async_watcher()?;
+pub async fn watch(peer_connection: PeerConnection) -> Result<(), PeerCommandError> {
+    peer_connection.wait_for_ready().await?;
+    let peer = peer_connection.get_peer().await?;
+    let (mut watcher, mut rx) = async_watcher().unwrap();
 
     let dirs = peer_connection.state.get_sync_directories().await;
     for dir in dirs {
@@ -39,7 +42,7 @@ pub async fn watch(peer_connection: PeerConnection) -> Result<(), notify::Error>
             .await
         {
             if let Some(path) = &dir.path {
-                watcher.watch(path, RecursiveMode::Recursive)?;
+                watcher.watch(path, RecursiveMode::Recursive).unwrap();
                 log::info!(
                     "{} Watching {:?}",
                     peer_connection.get_name().await,
@@ -58,7 +61,7 @@ pub async fn watch(peer_connection: PeerConnection) -> Result<(), notify::Error>
                     }
                 }
             }
-            Some(Some(Err(e))) => return Err(e),
+            Some(Some(Err(e))) => return Err(PeerCommandError::Other(e.to_string())),
             Some(None) => return Ok(()),
             None => return Ok(()),
         }

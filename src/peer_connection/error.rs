@@ -60,3 +60,9 @@ impl From<io::Error> for PeerCommandError {
         PeerCommandError::IOError(err)
     }
 }
+
+impl From<PeerConnectionError> for PeerCommandError {
+    fn from(err: PeerConnectionError) -> Self {
+        PeerCommandError::ConnectionError(err)
+    }
+}

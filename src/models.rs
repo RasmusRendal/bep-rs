@@ -26,7 +26,7 @@ pub struct SyncFolder {
     pub dir_path: Option<String>,
 }
 
-#[derive(Identifiable, Queryable, Insertable)]
+#[derive(Clone, Identifiable, Queryable, Insertable)]
 pub struct Peer {
     pub id: Option<i32>,
     pub device_id: Option<Vec<u8>>,

@@ -452,7 +452,10 @@ impl PeerConnection {
         Ok(())
     }
 
-    pub async fn directory_updated(&self, directory: &SyncDirectory) {
+    pub async fn directory_updated(
+        &self,
+        directory: &SyncDirectory,
+    ) -> Result<(), PeerCommandError> {
         let mut synced_index_updated = false;
         if let Ok(peer) = self.get_peer().await {
             if let Some(directory) = self.state.get_sync_directory(&directory.id.clone()).await {
@@ -466,8 +469,9 @@ impl PeerConnection {
             }
         }
         if synced_index_updated {
-            self.send_index().await.unwrap();
+            self.send_index().await?;
         }
+        Ok(())
     }
 
     /// Sends a request to close. Does not wait for the connection to be closed.

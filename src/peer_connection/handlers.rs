@@ -486,10 +486,8 @@ async fn handle_writing(
     mut wr: WriteHalf<impl AsyncWriteExt>,
     mut peer_connection: PeerConnection,
     mut rx: Receiver<(Vec<u8>, Option<oneshot::Sender<PeerRequestResponse>>)>,
-) -> tokio::io::Result<()> {
-    items::send_hello(&mut wr, peer_connection.get_name().await)
-        .await
-        .unwrap();
+) -> Result<(), PeerConnectionError> {
+    items::send_hello(&mut wr, peer_connection.get_name().await).await?;
 
     let cluster_config = generate_cluster_config(&mut peer_connection).await;
     write_message(

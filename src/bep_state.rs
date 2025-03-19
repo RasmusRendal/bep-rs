@@ -572,7 +572,9 @@ impl BepState {
             let cc = conn.clone();
             let dr = dir.clone();
             tokio::spawn(async move {
-                cc.directory_updated(&dr).await;
+                if let Err(e) = cc.directory_updated(&dr).await {
+                    log::error!("Error on directory changed handler: {}", e);
+                }
             });
         }
     }
