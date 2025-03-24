@@ -6,6 +6,7 @@ mod verifier;
 mod watcher;
 use crate::bep_state_reference::BepStateRef;
 use crate::models::Peer;
+use crate::storage_backend::StorageBackend;
 use crate::sync_directory::{SyncDirectory, SyncFile};
 use error::{PeerCommandError, PeerConnectionError};
 use handlers::{drain_requests, handle_connection};
@@ -20,9 +21,8 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use ring::digest;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{self, Write};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::io::{self};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::thread;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{channel, Sender};
@@ -67,6 +67,7 @@ pub struct PeerConnection {
     // A channel to activate, to shut down the connection
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
+    storage_backend: Arc<Mutex<dyn StorageBackend + Send>>,
 
     // Any fatal error should be stored here
     error: Arc<OnceLock<Option<PeerConnectionError>>>,
@@ -80,6 +81,7 @@ impl PeerConnection {
     pub fn new(
         socket: (impl AsyncWrite + AsyncRead + Unpin + Send + 'static),
         state: BepStateRef,
+        storage_backend: Arc<Mutex<dyn StorageBackend + Send>>,
         connector: bool,
     ) -> Self {
         let (tx, rx) = channel(100);
@@ -89,6 +91,7 @@ impl PeerConnection {
             requests: Arc::new(RwLock::new(HashMap::new())),
             tx,
             cancellation_token: cancellation_token.clone(),
+            storage_backend,
             error: Arc::new(OnceLock::new()),
             peer_id: Arc::new(OnceLock::new()),
             name: Arc::new(OnceLock::new()),
@@ -166,11 +169,10 @@ impl PeerConnection {
                             }),
                             sequence: 1,
                             block_size: x.get_size() as i32,
-                            blocks: x
-                                .gen_blocks(&dir)?
+                            blocks: SyncFile::gen_blocks(&x.path, &dir)?
                                 .iter()
                                 .map(|y| items::BlockInfo {
-                                    offset: 0,
+                                    offset: y.offset,
                                     size: y.size,
                                     hash: y.hash.clone(),
                                     weak_hash: 0,
@@ -212,94 +214,103 @@ impl PeerConnection {
             return Err(PeerCommandError::Other(
                 "File object has no blocks".to_string(),
             ));
-        } else if sync_file.blocks.len() != 1 {
-            return Err(PeerCommandError::Other(
-                "Multi-block files are unsupported :/".to_string(),
-            ));
         }
-        let block = &sync_file.blocks[0];
-        let name = sync_file.get_name();
+        for i in 0..sync_file.blocks.len() {
+            let block = &sync_file.blocks[i];
 
-        // TODO: Support bigger files
-        let message = items::Request {
-            id: message_id,
-            folder: directory.id.clone(),
-            name,
-            offset: 0,
-            size: block.size,
-            hash: block.hash.clone(),
-            from_temporary: false,
-            weak_hash: 0,
-            block_no: 0,
-        };
+            let name = sync_file.get_name();
+            let message = items::Request {
+                id: message_id,
+                folder: directory.id.clone(),
+                name,
+                offset: block.offset,
+                size: block.size,
+                hash: block.hash.clone(),
+                from_temporary: false,
+                weak_hash: 0,
+                block_no: i as i32,
+            };
 
-        log::info!("Submitting file request");
+            log::info!("{}: Submitting file request", self.get_name().await);
 
-        let message = self
-            .submit_request(
-                message_id,
-                PeerRequestResponseType::WhenResponse,
-                message.encode_for_bep(),
-            )
-            .await?;
+            let message = self
+                .submit_request(
+                    message_id,
+                    PeerRequestResponseType::WhenResponse,
+                    message.encode_for_bep(),
+                )
+                .await?;
 
-        log::info!("Got response");
+            log::info!("Got response");
 
-        match message {
-            PeerRequestResponse::Response(response) => {
-                match items::ErrorCode::from_i32(response.code) {
-                    Some(items::ErrorCode::NoError) => {
-                        let hash = digest::digest(&digest::SHA256, &response.data);
-                        if hash.as_ref() != sync_file.hash.clone() {
+            match message {
+                PeerRequestResponse::Response(response) => {
+                    match items::ErrorCode::from_i32(response.code) {
+                        Some(items::ErrorCode::NoError) => {
+                            let hash = digest::digest(&digest::SHA256, &response.data);
+                            if hash.as_ref() != block.hash {
+                                log::error!(
+                                    "{}: Mismatched hash in response",
+                                    self.get_name().await
+                                );
+                                return Err(PeerCommandError::InvalidFile);
+                            }
+
+                            let file = directory.path.clone();
+                            if file.is_none() {
+                                return Err(PeerCommandError::Other(
+                                    "Requesting file from non-synced directory".to_string(),
+                                ));
+                            }
+                            let mut file = file.unwrap();
+
+                            file.push(sync_file.get_name());
+                            log::info!("Writing to path {:?}", file);
+                            self.storage_backend
+                                .lock()
+                                .unwrap()
+                                .write_block(
+                                    file.to_str().unwrap(),
+                                    block.offset as usize,
+                                    &response.data,
+                                )
+                                .unwrap();
+                            let mut sync_file = sync_file.to_owned();
+                            sync_file.synced_version = sync_file.get_index_version();
+                            self.state.update_sync_file(directory, &sync_file).await;
+                        }
+                        Some(items::ErrorCode::NoSuchFile) => {
+                            return Err(PeerCommandError::NoSuchFile);
+                        }
+                        Some(items::ErrorCode::InvalidFile) => {
                             return Err(PeerCommandError::InvalidFile);
                         }
-
-                        let file = directory.path.clone();
-                        if file.is_none() {
-                            return Err(PeerCommandError::Other(
-                                "Requesting file from non-synced directory".to_string(),
-                            ));
+                        Some(items::ErrorCode::Generic) => {
+                            return Err(PeerCommandError::Other("Generic Error".to_string()));
                         }
-                        let mut file = file.unwrap();
-
-                        file.push(sync_file.get_name());
-                        log::info!("Writing to path {:?}", file);
-                        let mut o = File::create(file)?;
-                        o.write_all(response.data.as_slice())?;
-                        let mut sync_file = sync_file.to_owned();
-                        sync_file.synced_version = sync_file.get_index_version();
-                        self.state.update_sync_file(directory, &sync_file).await;
-                    }
-                    Some(items::ErrorCode::NoSuchFile) => {
-                        return Err(PeerCommandError::NoSuchFile);
-                    }
-                    Some(items::ErrorCode::InvalidFile) => {
-                        return Err(PeerCommandError::InvalidFile);
-                    }
-                    Some(items::ErrorCode::Generic) => {
-                        return Err(PeerCommandError::Other("Generic Error".to_string()));
-                    }
-                    None => {
-                        return Err(PeerCommandError::Other(format!(
-                            "Invalid error code received: {}",
-                            response.code
-                        )));
+                        None => {
+                            return Err(PeerCommandError::Other(format!(
+                                "Invalid error code received: {}",
+                                response.code
+                            )));
+                        }
                     }
                 }
-            }
-            PeerRequestResponse::Error(e) => {
-                return Err(PeerCommandError::Other(format!(
-                    "Received an error while getting file: {}",
-                    e
-                )));
-            }
-            PeerRequestResponse::Closed => {
-                return Err(PeerCommandError::ConnectionClosed);
-            }
-            _ => {
-                return Err(PeerCommandError::Other(
-                    "Got error on file request, and I don't know how to handle errors.".to_string(),
-                ));
+                PeerRequestResponse::Error(e) => {
+                    return Err(PeerCommandError::Other(format!(
+                        "Received an error while getting file: {}",
+                        e
+                    )));
+                }
+                PeerRequestResponse::Closed => {
+                    return Err(PeerCommandError::ConnectionClosed);
+                }
+                _ => {
+                    return Err(PeerCommandError::Other(
+                        "Got error on file request, and I don't know how to handle errors."
+                            .to_string(),
+                    ));
+                }
             }
         }
         Ok(())

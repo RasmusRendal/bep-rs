@@ -8,8 +8,6 @@ use futures::channel::oneshot;
 use log;
 use prost::Message;
 use ring::digest;
-use std::fs::File;
-use std::io::{BufReader, Read};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
@@ -71,8 +69,14 @@ async fn handle_request(
     }
     let mut path = path.unwrap();
     path.push(request.name.clone());
-    let fh = File::open(path);
-    if fh.is_err() {
+
+    let data = peer_connection.storage_backend.lock().unwrap().read_block(
+        path.to_str().unwrap(),
+        request.offset as usize,
+        request.size as usize,
+    );
+    if data.is_err() {
+        log::error!("Error on file request: {:?}", data.err());
         let response = items::Response {
             id: request.id,
             data: [].to_vec(),
@@ -83,10 +87,7 @@ async fn handle_request(
             .await;
         return Ok(());
     }
-
-    let mut buf_reader = BufReader::new(fh.unwrap());
-    let mut data = Vec::new();
-    buf_reader.read_to_end(&mut data)?;
+    let data = data.unwrap();
 
     let hash = digest::digest(&digest::SHA256, &data);
     let response = if !request.hash.is_empty() && (hash.as_ref() != request.hash) {
@@ -105,11 +106,7 @@ async fn handle_request(
             code: items::ErrorCode::NoError as i32,
         }
     };
-    log::info!(
-        "{}: Sending response {:?}",
-        peer_connection.get_name().await,
-        response
-    );
+    log::info!("{}: Sending response", peer_connection.get_name().await);
     peer_connection
         .submit_message(response.encode_for_bep())
         .await;

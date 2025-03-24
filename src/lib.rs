@@ -8,4 +8,5 @@ pub mod models;
 pub mod peer_connection;
 pub mod schema;
 pub mod server;
+pub mod storage_backend;
 pub mod util;

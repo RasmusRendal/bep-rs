@@ -1,17 +1,20 @@
 use bep_rs::bep_state_reference::BepStateRef;
 use bep_rs::models::Peer;
 use bep_rs::peer_connection::*;
+use bep_rs::storage_backend::LocalStorageBackend;
 use bep_rs::sync_directory::SyncBlock;
 use bep_rs::sync_directory::SyncDirectory;
 use bep_rs::sync_directory::SyncFile;
 use error::PeerCommandError;
 use error::PeerConnectionError;
+use rand::Rng;
 use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::{thread, time};
 use tokio::io;
 
@@ -90,8 +93,18 @@ impl TestStruct {
         &mut self,
     ) -> Result<(PeerConnection, PeerConnection), PeerConnectionError> {
         let (client, server) = tokio::io::duplex(64);
-        let connection1 = PeerConnection::new(client, self.state1.clone(), false);
-        let connection2 = PeerConnection::new(server, self.state2.clone(), true);
+        let connection1 = PeerConnection::new(
+            client,
+            self.state1.clone(),
+            Arc::new(Mutex::new(LocalStorageBackend {})),
+            false,
+        );
+        let connection2 = PeerConnection::new(
+            server,
+            self.state2.clone(),
+            Arc::new(Mutex::new(LocalStorageBackend {})),
+            true,
+        );
         self.conn1 = Some(connection1.clone());
         self.conn2 = Some(connection2.clone());
         connection1.wait_for_ready().await?;
@@ -258,7 +271,7 @@ async fn test_get_file() -> io::Result<()> {
         blocks: vec![SyncBlock {
             offset: 0,
             size: FILE_SIZE1,
-            hash: vec![],
+            hash: FILE_HASH.to_vec(),
         }],
     };
 
@@ -275,6 +288,62 @@ async fn test_get_file() -> io::Result<()> {
     let mut contents = String::new();
     buf_reader.read_to_string(&mut contents)?;
     assert_eq!(contents, FILE_CONTENTS);
+    connection1.close().await?;
+    connection2.close().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_get_twoblock_file() -> io::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut test_struct = TestStruct::new().await;
+
+    let file_contents: String = rand::rng()
+        .sample_iter(rand::distr::Alphanumeric)
+        .take(192 * 1024)
+        .map(char::from)
+        .collect();
+
+    test_struct.write_hello_file(&file_contents);
+    test_struct.peer().await;
+    test_struct.add_sync_dirs().await;
+    test_struct.connect_sync_dirs().await;
+
+    test_struct
+        .peer1dir
+        .as_ref()
+        .unwrap()
+        .generate_index(&test_struct.state1)
+        .await;
+
+    test_struct
+        .peer2dir
+        .as_ref()
+        .unwrap()
+        .generate_index(&test_struct.state2)
+        .await;
+
+    let (connection1, connection2) = test_struct.connect().await.unwrap();
+
+    connection1.wait_for_ready().await.unwrap();
+    connection2.wait_for_ready().await.unwrap();
+
+    connection1
+        .get_directory(test_struct.peer1dir.as_ref().unwrap())
+        .await
+        .unwrap();
+    thread::sleep(time::Duration::from_millis(400));
+
+    let mut dstfile = test_struct.peer1dirpath.clone();
+    dstfile.push(FILE_NAME);
+    let file = File::open(dstfile).unwrap();
+
+    let mut buf_reader = BufReader::new(file);
+    let mut contents = String::new();
+    buf_reader.read_to_string(&mut contents)?;
+    assert_eq!(contents.len(), file_contents.len());
+    assert!(contents == file_contents);
     connection1.close().await?;
     connection2.close().await?;
     Ok(())
@@ -657,12 +726,32 @@ async fn test_decentralized_sync() -> io::Result<()> {
     state3.sync_directory_with_peer(&sd3, &s3_p2).await;
 
     let (client, server) = tokio::io::duplex(64);
-    let conn1 = PeerConnection::new(client, state1.clone(), false);
-    let conn2 = PeerConnection::new(server, state2.clone(), true);
+    let conn1 = PeerConnection::new(
+        client,
+        state1.clone(),
+        Arc::new(Mutex::new(LocalStorageBackend {})),
+        false,
+    );
+    let conn2 = PeerConnection::new(
+        server,
+        state2.clone(),
+        Arc::new(Mutex::new(LocalStorageBackend {})),
+        true,
+    );
 
     let (client, server) = tokio::io::duplex(64);
-    let conn3 = PeerConnection::new(client, state2.clone(), false);
-    let conn4 = PeerConnection::new(server, state3.clone(), true);
+    let conn3 = PeerConnection::new(
+        client,
+        state2.clone(),
+        Arc::new(Mutex::new(LocalStorageBackend {})),
+        false,
+    );
+    let conn4 = PeerConnection::new(
+        server,
+        state3.clone(),
+        Arc::new(Mutex::new(LocalStorageBackend {})),
+        true,
+    );
 
     {
         let mut helloworld = File::create(syncdir1.clone().join(FILE_NAME)).unwrap();

@@ -1,7 +1,7 @@
 use super::bep_state_reference::BepStateRef;
 use ring::digest;
 use std::fs::File;
-use std::io::{self, BufReader, Read};
+use std::io::{self, BufReader, Read, Seek};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -96,23 +96,21 @@ impl SyncDirectory {
                         index_file.synced_version = vnumber;
                         index_file.versions.push((short_id, vnumber));
                         index_file.hash = hash;
+                        index_file.blocks = SyncFile::gen_blocks(&file.path(), &self).unwrap();
                         state.update_sync_file(self, index_file).await;
                     }
                     out_files.push(index_file.clone());
                 }
                 None => {
+                    let path = PathBuf::from(file.file_name());
                     out_files.push(SyncFile {
                         id: None,
-                        path: PathBuf::from(file.file_name()),
+                        path: path.clone(),
                         hash: hash.clone(),
                         modified_by: short_id,
                         synced_version: 0,
                         versions: vec![(short_id, 0)],
-                        blocks: vec![SyncBlock {
-                            offset: 0,
-                            size: data.len() as i32,
-                            hash,
-                        }],
+                        blocks: SyncFile::gen_blocks(&path, &self).unwrap(),
                     });
                     state
                         .update_sync_file(self, out_files.last().unwrap())
@@ -139,25 +137,63 @@ impl SyncDirectory {
 }
 
 impl SyncFile {
+    /// For a file of a given size, get the block size
+    fn get_blocksize(file_size: usize) -> usize {
+        if file_size < 250 * 1024_usize.pow(2) {
+            128 * 1024
+        } else if file_size < 500 * 1024_usize.pow(2) {
+            256 * 1024
+        } else if file_size < 1024_usize.pow(3) {
+            512 * 1024
+        } else if file_size < 2 * 1024_usize.pow(3) {
+            1024_usize.pow(2)
+        } else if file_size < 4 * 1024_usize.pow(3) {
+            2 * 1024_usize.pow(2)
+        } else if file_size < 8 * 1024_usize.pow(3) {
+            4 * 1024_usize.pow(2)
+        } else if file_size < 16 * 1024_usize.pow(3) {
+            8 * 1024_usize.pow(2)
+        } else {
+            16 * 1024_usize.pow(2)
+        }
+    }
+
     /// For a file on disk, generate a set of SyncBlocks
-    pub fn gen_blocks(&self, dir: &SyncDirectory) -> Result<Vec<SyncBlock>, io::Error> {
+    pub fn gen_blocks(
+        file_path: &PathBuf,
+        dir: &SyncDirectory,
+    ) -> Result<Vec<SyncBlock>, io::Error> {
         let mut path = dir
             .path
             .as_ref()
             .ok_or(io::Error::other("Non-synced directory"))?
             .clone();
-        path.push(&self.path);
-        let h = File::open(path)?;
+        path.push(file_path);
+        let mut h = File::open(path)?;
         let len = h.metadata()?.len() as u32;
-        // Here we may use only one block.
-        // TODO: Support more blocks
-        assert!(len < 1024 * 1024 * 16);
-        let block = SyncBlock {
-            offset: 0,
-            size: len as i32,
-            hash: self.hash.clone(),
-        };
-        Ok(vec![block])
+
+        let block_len = SyncFile::get_blocksize(len as usize);
+        let num_blocks = len.div_ceil(block_len as u32);
+        let mut blocks = Vec::new();
+        for _ in 0..(num_blocks - 1) {
+            let offset = h.stream_position()? as i64;
+            let mut buf = vec![0; block_len];
+            h.read_exact(&mut buf)?;
+            blocks.push(SyncBlock {
+                offset,
+                size: block_len as i32,
+                hash: digest::digest(&digest::SHA256, &buf).as_ref().to_vec(),
+            });
+        }
+
+        let mut buf = vec![];
+        h.read_to_end(&mut buf)?;
+        blocks.push(SyncBlock {
+            offset: (block_len as i64) * (num_blocks - 1) as i64,
+            size: (len as i32) % block_len as i32,
+            hash: digest::digest(&digest::SHA256, &buf).as_ref().to_vec(),
+        });
+        Ok(blocks)
     }
 
     pub fn get_index_version(&self) -> u64 {
@@ -199,6 +235,8 @@ impl SyncFile {
 
 #[cfg(test)]
 mod tests {
+    use rand::Rng;
+
     use super::*;
     use crate::bep_state::BepState;
     use std::fs::File;
@@ -230,6 +268,39 @@ mod tests {
         let fileinfo = index.pop().unwrap();
         assert!(fileinfo.path == PathBuf::from(filename));
         assert!(fileinfo.hash == hash);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_get_blocks() {
+        let statedir = tempfile::tempdir().unwrap().into_path();
+        let mut state = BepState::new(statedir);
+
+        let mut file_contents = vec![0u8; 192 * 1024];
+        rand::rng().fill(&mut file_contents[..]);
+        let filename = "testfile";
+
+        let path = tempfile::tempdir().unwrap().into_path();
+        let mut helloworld = path.clone();
+        helloworld.push(filename);
+        {
+            let mut o = File::create(helloworld.clone()).unwrap();
+            o.write_all(&file_contents).unwrap();
+        }
+
+        let directory = state.add_sync_directory(Some(path.clone()), "testdir".to_string(), None);
+
+        let mut index = directory
+            .generate_index(&BepStateRef::from_bepstate(state))
+            .await;
+        assert!(index.len() == 1);
+        let fileinfo = index.pop().unwrap();
+        assert_eq!(fileinfo.path, PathBuf::from(filename));
+        assert_eq!(fileinfo.blocks.len(), 2);
+
+        assert_eq!(fileinfo.blocks[0].offset, 0);
+        assert_eq!(fileinfo.blocks[0].size, 128 * 1024);
+        assert_eq!(fileinfo.blocks[1].offset, 128 * 1024);
+        assert_eq!(fileinfo.blocks[1].size, 64 * 1024);
     }
 
     #[test]
